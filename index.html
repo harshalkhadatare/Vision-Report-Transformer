@@ -371,7 +371,7 @@ REPORTS.rental = (function(){
     XLSX.writeFile(wb, dl, {bookType:'xlsx'});
   }
   return {
-    meta:{name:'Rental Report', tagline:'Daily equipment logsheet → utilisation & deployment summary',
+    meta:{name:'Rental Report', tagline:'Rental Logsheet Report',
       icon:'<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13l2-5h14l2 5"/><path d="M5 13h14v5H5z"/><circle cx="7.5" cy="18.5" r="1.5"/><circle cx="16.5" cy="18.5" r="1.5"/></svg>'},
     hint:'Upload the raw daily logsheet (equipmentnumber, date, status, running_hrs) or a workbook with a <b>Master</b> sheet. Large legacy <b>.xls</b> read best if you Save As <b>.xlsx</b> first.',
     process, kpis, charts, columns, tableColumns, filters, searchKeys, exportXlsx, exportName:'VisionInfra-Rental-Report'
@@ -412,7 +412,7 @@ REPORTS.stock = (function(){
     XLSX.writeFile(wb, dl, {bookType:'xlsx'});
   }
   return {
-    meta:{name:'Stock Report', tagline:'Inventory / stock export — generic preview (custom rules pluggable)', soon:true,
+    meta:{name:'Stock Report', tagline:'Inventory Stock Report', soon:true,
       icon:'<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>'},
     hint:'Upload any stock/inventory Excel. For now it previews and re-exports your data as-is — a dedicated Stock processor can be plugged in here later.',
     process, kpis, charts, get tableColumns(){return tableCols();}, filters:[], searchKeys:null, exportXlsx, exportName:'VisionInfra-Stock-Report'
