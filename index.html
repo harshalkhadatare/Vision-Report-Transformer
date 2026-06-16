@@ -2389,6 +2389,11 @@
     const POGIN_CONFIG = {
       dateFrom: '2026-04-01',   // PO Date window (inclusive)
       dateTo: '2026-06-10',
+      // Weekly procurement buckets (PO Date) — edit to match your review cadence.
+      weekBuckets: [['2026-04-01', '2026-04-14'], ['2026-04-15', '2026-04-22'],
+      ['2026-04-23', '2026-05-05'], ['2026-05-06', '2026-05-18'], ['2026-05-19', '2026-06-10']],
+      convFrom: '2026-05-19',   // PO→GRN conversion window (GRN Date)
+      convTo: '2026-06-10',
       // ── Record-level inclusion filter ─────────────────────────────────────────
       // The reference Summary counts ~2536 POs while the raw date-filtered dump has
       // ~3264 — i.e. the report drops ~22% of POs by a business rule that is NOT
@@ -2420,63 +2425,97 @@
     const PO_STATUS_MAP = { 'Cancelled': 'cancelled', 'Short Close': 'shortclosed', 'Executed': 'closed', 'Pending': 'open' };
 
     REPORTS.pogin = (function () {
-      let DIV = {}, CAT = {}, MON = {}, AGG = {};   // aggregates kept for charts/kpis
+      let DIV = {}, CAT = {}, MON = {}, AGG = {}, SECT = {};   // kept for charts/kpis/export
       const monKey = d => d ? d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') : '';
+      const inRange = (d, a, b) => !!d && d >= a && d <= b;
+      const dayBucket = n => n <= 7 ? 0 : n <= 15 ? 1 : n <= 30 ? 2 : 3;   // <07 / 08-15 / 16-30 / >31
       function process(wb) {
         const aoa = sheetToAoa(wb, 'Master Data'); if (aoa.length < 2) throw new Error('Master Data sheet looks empty.');
-        const hi = 0, H = (aoa[0] || []).map(h => String(h || '').trim()), idx = {}; H.forEach((h, i) => { if (!(h in idx)) idx[h] = i; });
+        const H = (aoa[0] || []).map(h => String(h || '').trim()), idx = {}; H.forEach((h, i) => { if (!(h in idx)) idx[h] = i; });
         const need = ['Purchae order No.', 'PO Date', 'PO STATUS', 'DIVISION', 'Department', 'Sub Dept.', 'ITEM CLASS', 'PO BASIC VALUE', 'GRN No', 'GRN DATE', 'GRN TAXABLE VALUE (GRN BASE)', 'PO ITEM CODE', 'PO SCH DETAILS', 'ITEM CODE (GRN)'];
         for (const n of need) if (!(n in idx)) throw new Error('This file is missing the column "' + n + '". Upload a PO-GIN ERP dump (same format as the sample).');
         const C = n => idx[n];
         const lo = new Date(POGIN_CONFIG.dateFrom), hiD = new Date(POGIN_CONFIG.dateTo);
-        DIV = {}; CAT = {}; MON = {}; AGG = { po: new Set(), grn: new Set(), poval: 0, grnval: 0, bills: new Set(), pays: new Set() };
-        POGIN_CONFIG.DIV_ORDER.forEach(d => DIV[d] = { div: d, total: 0, cancelled: 0, shortclosed: 0, closed: 0, open: 0, poval: 0, grnval: 0 });
+        const wkB = POGIN_CONFIG.weekBuckets.map(([a, b]) => [new Date(a), new Date(b)]);
+        const cvLo = new Date(POGIN_CONFIG.convFrom), cvHi = new Date(POGIN_CONFIG.convTo);
+        const ORDER = POGIN_CONFIG.DIV_ORDER;
+        DIV = {}; CAT = {}; MON = {}; AGG = { po: new Set(), grn: new Set(), poval: 0, grnval: 0 };
+        ORDER.forEach(d => DIV[d] = { div: d, total: 0, cancelled: 0, shortclosed: 0, closed: 0, open: 0, poval: 0, grnval: 0 });
+        const aging = {}, wkDiv = {}, monPo = {}, monGrn = {}, wkCat = {}, divWise = {};
+        ORDER.forEach(d => { aging[d] = [0, 0, 0, 0]; wkDiv[d] = [0, 0, 0, 0, 0]; monPo[d] = {}; monGrn[d] = {}; });
+        const poDiv = {}, poDate = {}, poConv = {};   // per-PO for conversion timeline
         const seenPO = new Set(), seenPOline = new Set(), seenGRNline = new Set();
-        for (let i = hi + 1; i < aoa.length; i++) {
+        for (let i = 1; i < aoa.length; i++) {
           const r = aoa[i]; if (!r) continue;
           const po = String(r[C('Purchae order No.')] || '').trim(); if (!po) continue;
-          const pdate = toDate(r[C('PO Date')]); if (!pdate || pdate < lo || pdate > hiD) continue;
+          const pdate = toDate(r[C('PO Date')]); if (!inRange(pdate, lo, hiD)) continue;
           const eg = r[C('DIVISION')], dept = r[C('Department')], sub = r[C('Sub Dept.')];
           if (!POGIN_CONFIG.includeRow(eg, dept, sub, r[C('PO STATUS')])) continue;
           const division = POGIN_CONFIG.divisionOf(eg, dept, sub); if (!division || !DIV[division]) continue;
           const status = String(r[C('PO STATUS')] || '').trim(), sk = PO_STATUS_MAP[status];
-          // PO-level status counts (once per PO)
+          poDiv[po] = division; poDate[po] = pdate;
           if (!seenPO.has(po)) {
             seenPO.add(po); AGG.po.add(po);
             const d = DIV[division]; d.total++; if (sk) d[sk]++;
+            if (sk === 'open') { const age = Math.floor((hiD - pdate) / 864e5); aging[division][dayBucket(age)]++; }
           }
-          // PO value (BR) — dedup PO-line
-          const plk = po + '¦' + (r[C('PO ITEM CODE')] || '') + '¦' + (r[C('PO SCH DETAILS')] || '');
+          // PO value (col BR) — dedup PO-line
+          const plk = po + '\u00A6' + (r[C('PO ITEM CODE')] || '') + '\u00A6' + (r[C('PO SCH DETAILS')] || '');
           if (!seenPOline.has(plk)) {
             seenPOline.add(plk);
             const v = numv(r[C('PO BASIC VALUE')]); DIV[division].poval += v; AGG.poval += v;
-            const cat = String(r[C('ITEM CLASS')] || '—').trim() || '—'; CAT[cat] = (CAT[cat] || 0) + v;
-            const mk = monKey(pdate); (MON[mk] = MON[mk] || { po: 0, grn: 0 }).po += v;
+            const cat = String(r[C('ITEM CLASS')] || '\u2014').trim() || '\u2014'; CAT[cat] = (CAT[cat] || 0) + v;
+            let wi = -1; for (let k = 0; k < wkB.length; k++) { if (inRange(pdate, wkB[k][0], wkB[k][1])) { wi = k; break; } }
+            if (wi >= 0) {
+              wkDiv[division][wi] += v; (wkCat[cat] = wkCat[cat] || [0, 0, 0, 0, 0])[wi] += v;
+              if (wi === wkB.length - 1) { (divWise[cat] = divWise[cat] || {})[division] = (divWise[cat][division] || 0) + v; }
+            }
+            const mk = monKey(pdate); monPo[division][mk] = (monPo[division][mk] || 0) + v; (MON[mk] = MON[mk] || { po: 0, grn: 0 }).po += v;
           }
-          // GRN value (AW) — dedup GRN-line
+          // GRN value (col AW) — dedup GRN-line
           const grn = String(r[C('GRN No')] || '').trim();
           if (grn) {
             AGG.grn.add(grn);
-            const glk = grn + '¦' + (r[C('ITEM CODE (GRN)')] || '');
+            const glk = grn + '\u00A6' + (r[C('ITEM CODE (GRN)')] || '');
             if (!seenGRNline.has(glk)) {
               seenGRNline.add(glk);
               const gv = numv(r[C('GRN TAXABLE VALUE (GRN BASE)')]); DIV[division].grnval += gv; AGG.grnval += gv;
-              const gd = toDate(r[C('GRN DATE')]); if (gd) { const mk = monKey(gd); (MON[mk] = MON[mk] || { po: 0, grn: 0 }).grn += gv; }
+              const gd = toDate(r[C('GRN DATE')]);
+              if (gd) {
+                const mk = monKey(gd); monGrn[division][mk] = (monGrn[division][mk] || 0) + gv; (MON[mk] = MON[mk] || { po: 0, grn: 0 }).grn += gv;
+                if (inRange(gd, cvLo, cvHi)) { const prev = poConv[po]; if (prev === undefined || gd < prev) poConv[po] = gd; }
+              }
             }
           }
         }
-        const rows = POGIN_CONFIG.DIV_ORDER.map((d, i) => ({ sr: String(i + 1), ...DIV[d] }));
-        // totals row
+        // PO->GRN conversion buckets (distinct PO, first GRN in conv window)
+        const conv = {}; ORDER.forEach(d => conv[d] = [0, 0, 0, 0]);
+        Object.keys(poConv).forEach(po => {
+          const d = poDiv[po]; if (!d || !conv[d]) return;
+          const dd = Math.floor((poConv[po] - poDate[po]) / 864e5); if (dd >= 0) conv[d][dayBucket(dd)]++;
+        });
+        // months present (PO window)
+        const months = []; {
+          let a = new Date(lo.getFullYear(), lo.getMonth(), 1);
+          while (a <= hiD) { months.push(monKey(a)); a = new Date(a.getFullYear(), a.getMonth() + 1, 1); }
+        }
+        // section-1 rows + total
+        const rows = ORDER.map((d, i) => ({ sr: String(i + 1), ...DIV[d] }));
         const T = { sr: '', div: 'Total', total: 0, cancelled: 0, shortclosed: 0, closed: 0, open: 0, poval: 0, grnval: 0 };
         rows.forEach(r => ['total', 'cancelled', 'shortclosed', 'closed', 'open', 'poval', 'grnval'].forEach(k => T[k] += r[k]));
         rows.push(T);
-        return { rows, note: `${fmtN(AGG.po.size)} POs · ${fmtN(AGG.grn.size)} GRNs · PO value ₹${fmtN(AGG.poval, 0)} · processed dynamically.` };
+        SECT = {
+          order: ORDER, aging, conv, wkDiv, wkCat, divWise, monPo, monGrn, months,
+          weekLabels: POGIN_CONFIG.weekBuckets.map(([a, b]) => fmtDMY(new Date(a)) + ' to ' + fmtDMY(new Date(b)))
+        };
+        return { rows, note: `${fmtN(AGG.po.size)} POs \u00b7 ${fmtN(AGG.grn.size)} GRNs \u00b7 PO value \u20b9${fmtN(AGG.poval, 0)} \u00b7 8-section summary computed dynamically.` };
       }
+      const fmtDMY = d => String(d.getDate()).padStart(2, '0') + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + d.getFullYear();
       function kpis() {
         return [['Total Purchase Orders', fmtN(AGG.po.size), 'distinct POs in period', '#2f6db0'],
         ['Total GRN Records', fmtN(AGG.grn.size), 'distinct GRNs', '#1d9e75'],
-        ['PO Value (Basic)', '₹' + fmtN(AGG.poval, 0), 'col BR · PO BASIC VALUE', '#163a5c'],
-        ['GRN Value (Taxable)', '₹' + fmtN(AGG.grnval, 0), 'col AW · GRN TAXABLE', '#0a66c2'],
+        ['PO Value (Basic)', '\u20b9' + fmtN(AGG.poval, 0), 'col BR \u00b7 PO BASIC VALUE', '#163a5c'],
+        ['GRN Value (Taxable)', '\u20b9' + fmtN(AGG.grnval, 0), 'col AW \u00b7 GRN TAXABLE', '#0a66c2'],
         ['Open POs', fmtN(sumKey('open')), 'pending POs', '#f59e0b'],
         ['Cancelled POs', fmtN(sumKey('cancelled')), 'cancelled POs', '#d8504c']];
       }
@@ -2495,7 +2534,7 @@
             }
           },
           {
-            title: 'PO value by division', sub: '₹ basic value (col BR)', height: 330, render(cv) {
+            title: 'PO value by division', sub: '\u20b9 basic value (col BR)', height: 330, render(cv) {
               return new Chart(cv, {
                 type: 'bar', data: { labels: divs, datasets: [{ data: divs.map(d => Math.round(DIV[d].poval)), backgroundColor: '#2f6db0', borderRadius: 5 }] },
                 options: opts({ plugins: { legend: { display: false } }, scales: { y: { ticks: { callback: v => fmtN(v) } }, x: { ticks: { maxRotation: 50, font: { size: 10 } } } } })
@@ -2503,7 +2542,7 @@
             }
           },
           {
-            title: 'PO value by category', sub: 'top 12 · ITEM CLASS', height: 330, render(cv) {
+            title: 'PO value by category', sub: 'top 12 \u00b7 ITEM CLASS', height: 330, render(cv) {
               const e = Object.entries(CAT).sort((a, b) => b[1] - a[1]).slice(0, 12);
               return new Chart(cv, {
                 type: 'bar', data: { labels: e.map(x => x[0]), datasets: [{ data: e.map(x => Math.round(x[1])), backgroundColor: '#f59e0b', borderRadius: 5 }] },
@@ -2528,14 +2567,117 @@
       { key: 'open', label: 'Open PO', type: 'int' }, { key: 'poval', label: 'PO Value (BR)', type: 'num2' },
       { key: 'grnval', label: 'GRN Value (AW)', type: 'num2' }];
       const tableColumns = columns.map(c => ({ key: c.key, label: c.label, fmt: c.type === 'num2' ? 'num2' : c.type === 'int' ? 'int' : 'text' }));
+
+      /* ---- exact-format 8-section Excel export (matches the reference layout) ---- */
+      async function exportExcel(fileName) {
+        const wb = new ExcelJS.Workbook(); wb.creator = 'Vision Infra Report Analyzer';
+        const ws = wb.addWorksheet('SUMMARY', { views: [{ showGridLines: false }] });
+        const W = [7.5, 26, 17, 15, 15, 15, 15, 15.5, 12, 14.5, 12]; W.forEach((w, i) => ws.getColumn(i + 1).width = w);
+        const NAVY = 'FF163A5C', TITLE = 'FFDCE6F1', HEAD = 'FFB8CCE4', TOTAL = 'FFD7E1F2', GREY = 'FFF3F6FB';
+        const med = { style: 'medium', color: { argb: 'FF8FA8C8' } }, thin = { style: 'thin', color: { argb: 'FFBFCBDD' } };
+        const box = b => ({ top: b, left: b, bottom: b, right: b });
+        const ACC = '#,##0.00';
+        let r = 1;
+        const setRow = (h) => { ws.getRow(r).height = h; };
+        const merge = (c1, c2) => ws.mergeCells(r, c1, r, c2);
+        const cell = (c, v, o = {}) => {
+          const x = ws.getCell(r, c); if (v && v.formula) x.value = { formula: v.formula }; else x.value = v;
+          x.font = { name: 'Arial', size: o.sz || 10, bold: !!o.bold, color: { argb: o.fc || NAVY } };
+          x.alignment = { horizontal: o.al || 'center', vertical: 'middle', wrapText: !!o.wrap };
+          if (o.fill) x.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: o.fill } };
+          if (o.fmt) x.numFmt = o.fmt; x.border = box(o.bd || thin); return x;
+        };
+        const titleRow = (text, span) => {
+          setRow(20); merge(1, span); cell(1, text, { bold: true, sz: span > 7 ? 12 : 12, fill: TITLE, bd: med });
+          for (let c = 2; c <= 11; c++) { const x = ws.getCell(r, c); x.border = box(med); if (c <= span) x.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: TITLE } }; }
+          r++;
+        };
+        const headRow = (labels, opts = {}) => { setRow(26); labels.forEach((l, i) => cell(i + 1, l, { bold: true, fill: HEAD, wrap: true, sz: 9.5, fmt: opts.dates && i >= 2 ? 'mmm-yy' : null, al: i === 1 && !opts.catLeft ? 'left' : 'center' })); r++; };
+        const dataRow = (sr, name, vals, opts = {}) => {
+          setRow(15);
+          cell(1, sr, {}); cell(2, name, { al: 'left', bold: false });
+          vals.forEach((v, i) => cell(i + 3, v, { al: 'right', fmt: opts.fmt || '#,##0', fill: (r % 2 ? GREY : null) })); r++;
+        };
+        const totalRow = (span, firstCol, lastCol, dataFrom, dataTo, fmt) => {
+          setRow(16); merge(1, 2); cell(1, 'Total', { bold: true, fill: TOTAL, bd: med });
+          ws.getCell(r, 2).border = box(med);
+          for (let c = firstCol; c <= lastCol; c++) {
+            const L = ws.getColumn(c).letter;
+            cell(c, { formula: `SUM(${L}${dataFrom}:${L}${dataTo})` }, { bold: true, fill: TOTAL, al: 'right', fmt: fmt || '#,##0', bd: med });
+          }
+          r++;
+        };
+        const blank = () => { setRow(6); r++; };
+        const S = SECT, ORDER = S.order;
+        const dF = POGIN_CONFIG.dateFrom, dT = POGIN_CONFIG.dateTo;
+        const lbl = (s) => { const m = { '2026-04-01': '1st April 2026', '2026-06-10': '10th Jun 2026', '2026-05-19': '19th May 2026' }; return m[s] || s; };
+        const win = `( ${lbl(dF)} to ${lbl(dT)} )`, cwin = `( ${lbl(POGIN_CONFIG.convFrom)} to ${lbl(POGIN_CONFIG.convTo)} )`;
+
+        // banner
+        titleRow(COMPANY.name || 'Vision Infra Equipment Solutions Limited', 7);
+        titleRow('Weekly Review Meeting Report- Purchase', 7); blank();
+        // ---- 1. Open PO Status ----
+        titleRow('Open PO Status Report ' + win, 7);
+        headRow(['Sr. No.', 'Division', 'Total PO Created', 'Cancelled PO', 'Short Closed PO', 'Closed PO', 'Open PO']);
+        let d0 = r; ORDER.forEach((d, i) => { const x = DIV[d]; dataRow(i + 1, d, [x.total, x.cancelled, x.shortclosed, x.closed, x.open]); });
+        totalRow(2, 3, 7, d0, r - 1); blank();
+        // ---- 2. Open PO Aging ----
+        titleRow('Open PO Aging Report ' + win, 7);
+        headRow(['Sr. No.', 'Division', 'Total Open PO', '< 07 Days', '08 - 15 Days', '16 - 30 Days', '> 31 Days']);
+        d0 = r; ORDER.forEach((d, i) => { const a = S.aging[d]; dataRow(i + 1, d, [a[0] + a[1] + a[2] + a[3], a[0], a[1], a[2], a[3]]); });
+        totalRow(2, 3, 7, d0, r - 1); blank();
+        // ---- 3. PO to GRN Conversion ----
+        titleRow('PO to GRN Conversion Timeline Status weekly ' + cwin, 7);
+        headRow(['Sr. No.', 'Division', 'Total PO', '< 07 Days', '08 - 15 Days', '16 - 30 Days', '> 31 Days']);
+        d0 = r; ORDER.forEach((d, i) => { const a = S.conv[d]; dataRow(i + 1, d, [a[0] + a[1] + a[2] + a[3], a[0], a[1], a[2], a[3]]); });
+        totalRow(2, 3, 7, d0, r - 1); blank();
+        // ---- 4. Weekly Procurement Trend (Division) ----
+        titleRow('Weekly Procurement Trend', 7);
+        headRow(['Sr. No.', 'Division', ...S.weekLabels]);
+        d0 = r; ORDER.forEach((d, i) => dataRow(i + 1, d, S.wkDiv[d], { fmt: ACC }));
+        totalRow(2, 3, 7, d0, r - 1, ACC); blank();
+        // ---- 5. Weekly Procurement Trend (Category) ----
+        titleRow('Weekly Procurement Trend category wise', 7);
+        headRow(['Sr. No.', 'CATEGORY', ...S.weekLabels]);
+        const cats = Object.keys(S.wkCat).sort(); d0 = r;
+        cats.forEach((c, i) => dataRow(i + 1, c, S.wkCat[c], { fmt: ACC }));
+        totalRow(2, 3, 7, d0, r - 1, ACC); blank();
+        // ---- 6. Weekly Procurement Trend Division wise (last week) ----
+        titleRow('Weekly Procurement Trend Division wise ( ' + lbl(POGIN_CONFIG.convFrom) + ' to ' + lbl(POGIN_CONFIG.convTo) + ' )', 11);
+        const dwCols = ORDER.map(d => d === 'REFURBISHMENT' ? 'TRADING' : d);
+        headRow(['Sr. No.', 'CATEGORY', ...dwCols]);
+        const cats2 = Object.keys(S.divWise).sort(); d0 = r;
+        cats2.forEach((c, i) => dataRow(i + 1, c, ORDER.map(d => S.divWise[c][d] || 0), { fmt: ACC }));
+        {
+          setRow(16); merge(1, 2); cell(1, 'Total', { bold: true, fill: TOTAL, bd: med }); ws.getCell(r, 2).border = box(med);
+          for (let c = 3; c <= 11; c++) { const L = ws.getColumn(c).letter; cell(c, { formula: `SUM(${L}${d0}:${L}${r - 1})` }, { bold: true, fill: TOTAL, al: 'right', fmt: ACC, bd: med }); } r++;
+        }
+        blank();
+        // ---- 7. Monthwise Procurement (GRN based) ----
+        titleRow('Monthwise Procurement Summary GRN based ' + win, 2 + S.months.length);
+        headRow(['Sr. No.', 'Division', ...S.months.map(m => new Date(m + '-01'))], { dates: true });
+        d0 = r; ORDER.forEach((d, i) => dataRow(i + 1, d, S.months.map(m => S.monGrn[d][m] || 0), { fmt: ACC }));
+        totalRow(2, 3, 2 + S.months.length, d0, r - 1, ACC); blank();
+        // ---- 8. Monthwise Procurement (PO based) ----
+        titleRow('Monthwise Procurement Summary ' + win, 2 + S.months.length);
+        headRow(['Sr. No.', 'Division', ...S.months.map(m => new Date(m + '-01'))], { dates: true });
+        d0 = r; ORDER.forEach((d, i) => dataRow(i + 1, d, S.months.map(m => S.monPo[d][m] || 0), { fmt: ACC }));
+        totalRow(2, 3, 2 + S.months.length, d0, r - 1, ACC);
+
+        const buf = await wb.xlsx.writeBuffer();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+        a.download = fileName; a.click();
+      }
+
       return {
         meta: {
-          name: 'PO-GIN-BILL-PAYMENT', tagline: 'Stock · Open PO status & procurement summary from an ERP PO-GIN dump',
+          name: 'PO-GIN-BILL-PAYMENT', tagline: 'Stock \u00b7 Open PO status & 8-section procurement summary from an ERP PO-GIN dump',
           icon: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><path d="M9 5a2 2 0 012-2h2a2 2 0 012 2M9 5a2 2 0 002 2h2a2 2 0 002-2"/><path d="M9 12h6M9 16h6"/></svg>'
         },
-        hint: 'Upload the ERP-generated <b>PO-GIN</b> report (the workbook with a <b>Master Data</b> sheet, same format as the sample). Division roll-up &amp; the date window are in the editable <b>POGIN_CONFIG</b> block at the top of the file.',
+        hint: 'Upload the ERP-generated <b>PO-GIN</b> report (workbook with a <b>Master Data</b> sheet, same format as the sample). The Excel export reproduces the full <b>8-section</b> summary layout. Division roll-up, the date window &amp; weekly buckets are in the editable <b>POGIN_CONFIG</b> block at the top of the file.',
         sheetName: 'Open PO Status', exportName: 'VisionInfra-PO-GIN-Summary',
-        process, kpis, charts, columns, tableColumns, filters: [], searchKeys: ['div']
+        process, kpis, charts, columns, tableColumns, filters: [], searchKeys: ['div'], exportExcel
       };
     })();
 
@@ -2734,8 +2876,10 @@
       showLoad('Building styled Excel…');
       setTimeout(async () => {
         try {
-          await styledExcel(PROC, VIEW, PROC.exportName + '-' + new Date().toISOString().slice(0, 10) + '.xlsx');
-          setMsg(`<b>Excel report generated.</b> ${fmtN(VIEW.length)} rows, fully formatted.`, 'ok');
+          const fn = PROC.exportName + '-' + new Date().toISOString().slice(0, 10) + '.xlsx';
+          if (PROC.exportExcel) { await PROC.exportExcel(fn); }
+          else { await styledExcel(PROC, VIEW, fn); }
+          setMsg(`<b>Excel report generated.</b> ${PROC.exportExcel ? 'Full 8-section summary layout.' : fmtN(VIEW.length) + ' rows, fully formatted.'}`, 'ok');
         }
         catch (e) { setMsg('Could not build Excel: ' + (e.message || e), 'err'); } hideLoad();
       }, 120);
