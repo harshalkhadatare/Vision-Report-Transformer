@@ -25,7 +25,7 @@
       email: "info@visioninfraindia.com",                                                    /* EDIT */
       website: "https://www.visioninfraindia.com/"                                            /* EDIT */
     };
-    const APP_VERSION = "2.0";   /* dashboard build version shown in footer */
+    const APP_VERSION = "4.1";   /* dashboard build version shown in footer */
   </script>
   <style>
     :root {
@@ -353,8 +353,8 @@
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: .4px;
-      color: #8a5a06;
-      background: #fdeccd;
+      color: #329437;
+      background: #cef1ca;
       padding: 3px 9px;
       border-radius: 20px
     }
@@ -3059,7 +3059,7 @@
       const ad = $('ftrAddr'); if (ad) ad.textContent = COMPANY.address;
       $('ftrYear').textContent = new Date().getFullYear();
       const ver = $('ftrVer'); if (ver) ver.textContent = 'Version ' + APP_VERSION;
-      const upd = $('ftrUpd'); if (upd) upd.textContent = 'Updated ' + new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+      const upd = $('ftrUpd'); if (upd) upd.textContent = 'Updated on 21 June 2026';
     }
 
     /* ----- wire-up ----- */
