@@ -1909,8 +1909,15 @@
         <div class="auth-field"><label>Full Name</label><input id="rgName" placeholder="e.g. Harshal Khadatare"></div>
         <div class="auth-field"><label>User ID</label><input id="rgUser" autocomplete="username"
             placeholder="e.g. 21686"></div>
+        <div class="auth-field"><label>Department <span style="opacity:.6">(optional)</span></label>
+          <select id="rgDept">
+            <option value="">— Select —</option>
+            <option>Accounts</option><option>Purchase</option><option>HR</option>
+            <option>Admin</option><option>Operations</option><option>Management</option><option>IT</option>
+          </select></div>
         <div class="auth-field"><label>Password</label><input id="rgPass" type="password" autocomplete="new-password"
-            placeholder="min 4 characters"></div>
+            placeholder="8+ chars, upper, lower, number, symbol" oninput="pwStrength(this.value)">
+          <div class="pwbar"><i id="pwFill"></i></div><div class="pwhint" id="pwHint">Use 8+ characters with a mix of cases, a number and a symbol.</div></div>
         <button class="auth-btn" id="rgBtn">Create account</button>
         <div class="auth-switch">Already registered? <button id="toLogin">Back to login</button></div>
       </div>
@@ -1929,6 +1936,9 @@
           <button class="btn btn-ghost" id="btnCsv" disabled>⬇ <span class="lbl">CSV</span></button>
           <button class="btn btn-ghost" id="btnPdf" disabled>⬇ <span class="lbl">PDF</span></button>
           <button class="btn btn-green" id="btnXlsx" disabled>⬇ Excel report</button>
+          <button class="btn btn-ghost" id="btnAdmin" style="display:none" title="Admin dashboard">🛡 Admin</button>
+          <button class="btn btn-ghost" id="btnProfile" title="My profile">👤</button>
+          <button class="btn btn-ghost" id="btnTheme" title="Toggle dark / light">🌙</button>
           <button class="btn btn-ghost" id="btnLogout">Logout</button>
           <div class="userchip" id="userChip"></div>
         </div>
@@ -2041,8 +2051,248 @@
     </footer>
   </div><!-- /appRoot -->
 
+  <!-- ===================== ADMIN DASHBOARD OVERLAY ===================== -->
+  <div id="adminView" class="overlay" style="display:none">
+    <div class="ov-card ov-wide">
+      <div class="ov-head"><b>🛡 Admin Dashboard</b><button class="ov-x" id="admClose">✕</button></div>
+      <div class="adm-tabs">
+        <button class="adm-tab active" data-tab="kpi">Overview</button>
+        <button class="adm-tab" data-tab="users">Users</button>
+        <button class="adm-tab" data-tab="files">Files</button>
+        <button class="adm-tab" data-tab="activity">Activity Log</button>
+      </div>
+      <div class="adm-body">
+        <div class="adm-pane" id="admKpi">
+          <div class="adm-kpis" id="admKpiCards"></div>
+          <div class="adm-charts">
+            <div class="adm-chart"><h6>User Registrations (14d)</h6><canvas id="admChartReg" height="150"></canvas></div>
+            <div class="adm-chart"><h6>File Uploads (14d)</h6><canvas id="admChartUpl" height="150"></canvas></div>
+            <div class="adm-chart"><h6>Reports Generated (14d)</h6><canvas id="admChartRep" height="150"></canvas></div>
+          </div>
+        </div>
+        <div class="adm-pane" id="admUsers" style="display:none">
+          <input class="adm-search" id="admUserSearch" placeholder="Search name / user ID / department…" oninput="renderAdminUsers()">
+          <div class="adm-tablewrap"><table class="adm-table" id="admUsersTable"></table></div>
+        </div>
+        <div class="adm-pane" id="admFiles" style="display:none">
+          <input class="adm-search" id="admFileSearch" placeholder="Search file / uploader / type…" oninput="renderAdminFiles()">
+          <div class="adm-tablewrap"><table class="adm-table" id="admFilesTable"></table></div>
+        </div>
+        <div class="adm-pane" id="admActivity" style="display:none">
+          <div class="adm-filters">
+            <input class="adm-search" id="admActUser" placeholder="Filter by User ID…">
+            <select id="admActAction"><option value="">All actions</option>
+              <option>login</option><option>logout</option><option>register</option><option>login_failed</option>
+              <option>approve</option><option>reject</option><option>upload</option><option>delete_file</option>
+              <option>report</option><option>password_change</option><option>password_reset</option></select>
+            <button class="btn btn-ghost" onclick="loadAdminActivity()">Apply</button>
+          </div>
+          <div class="adm-tablewrap"><table class="adm-table" id="admActTable"></table></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== PROFILE / CHANGE PASSWORD OVERLAY ===================== -->
+  <div id="profileView" class="overlay" style="display:none">
+    <div class="ov-card">
+      <div class="ov-head"><b>👤 My Profile</b><button class="ov-x" id="profClose">✕</button></div>
+      <div class="prof-body">
+        <div id="profInfo" class="prof-info"></div>
+        <h6>Change Password</h6>
+        <div class="auth-field"><label>Current password</label><input id="cpOld" type="password" autocomplete="current-password"></div>
+        <div class="auth-field"><label>New password</label><input id="cpNew" type="password" autocomplete="new-password" oninput="pwStrength2(this.value)" placeholder="8+ chars, upper, lower, number, symbol">
+          <div class="pwbar"><i id="pwFill2"></i></div><div class="pwhint" id="pwHint2"></div></div>
+        <div class="prof-msg" id="cpMsg"></div>
+        <button class="auth-btn" id="cpBtn" style="margin-top:6px">Update password</button>
+      </div>
+    </div>
+  </div>
+
+  <style>
+    .pwbar{height:5px;border-radius:4px;background:#e3e9f0;margin-top:7px;overflow:hidden}
+    .pwbar i{display:block;height:100%;width:0;background:#d8504c;border-radius:4px;transition:width .25s,background .25s}
+    .pwhint{font-size:11px;margin-top:4px;color:#7a8aa0}
+    .overlay{position:fixed;inset:0;z-index:120;background:rgba(10,20,35,.55);backdrop-filter:blur(3px);display:flex;align-items:flex-start;justify-content:center;padding:34px 16px;overflow:auto}
+    .ov-card{background:var(--card,#fff);width:100%;max-width:480px;border-radius:18px;box-shadow:0 30px 80px rgba(0,0,0,.4);overflow:hidden}
+    .ov-wide{max-width:1080px}
+    .ov-head{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;background:linear-gradient(135deg,#163a5c,#0e2a43);color:#fff}
+    .ov-head b{font-size:16px}
+    .ov-x{background:rgba(255,255,255,.16);border:0;color:#fff;width:30px;height:30px;border-radius:9px;cursor:pointer;font-size:14px}
+    .ov-x:hover{background:rgba(255,255,255,.3)}
+    .adm-tabs{display:flex;gap:4px;padding:12px 16px 0;background:var(--card,#fff);border-bottom:1px solid var(--line,#e6edf4)}
+    .adm-tab{border:0;background:transparent;padding:9px 16px;border-radius:9px 9px 0 0;cursor:pointer;font-weight:600;font-size:13px;color:var(--ink2,#5a6b80)}
+    .adm-tab.active{background:var(--sky,#e8f1fb);color:var(--steel,#2f6db0)}
+    .adm-body{padding:18px 20px;max-height:72vh;overflow:auto;background:var(--card,#fff)}
+    .adm-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:20px}
+    .adm-kc{background:var(--sky,#f3f8ff);border:1px solid var(--line,#e3edf8);border-radius:13px;padding:14px 16px}
+    .adm-kc .v{font-size:24px;font-weight:800;color:var(--navy2,#163a5c)}
+    .adm-kc .l{font-size:11px;color:var(--ink2,#6a7c92);text-transform:uppercase;letter-spacing:.4px;margin-top:3px;font-weight:600}
+    .adm-charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+    .adm-chart{border:1px solid var(--line,#e6edf4);border-radius:13px;padding:12px}
+    .adm-chart h6{margin:0 0 8px;font-size:12px;color:var(--ink2,#5a6b80)}
+    .adm-search{width:100%;padding:9px 12px;border:1px solid var(--line,#d8e2ee);border-radius:10px;margin-bottom:12px;font-size:13px;background:var(--card,#fff);color:var(--ink,#1b2b3d)}
+    .adm-filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+    .adm-filters .adm-search{margin:0;flex:1;min-width:160px}.adm-filters select{padding:9px 12px;border:1px solid var(--line,#d8e2ee);border-radius:10px}
+    .adm-tablewrap{overflow:auto;border:1px solid var(--line,#e6edf4);border-radius:12px}
+    .adm-table{width:100%;border-collapse:collapse;font-size:12.5px;min-width:560px}
+    .adm-table th{background:var(--navy2,#163a5c);color:#fff;text-align:left;padding:9px 11px;position:sticky;top:0;font-weight:600}
+    .adm-table td{padding:8px 11px;border-bottom:1px solid var(--line,#eef3f8);color:var(--ink,#26384c)}
+    .adm-table tr:hover td{background:var(--sky,#f6faff)}
+    .pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700}
+    .pill.approved{background:#e3f6ee;color:#0f7a52}.pill.pending{background:#fff3da;color:#9a6a12}
+    .pill.rejected{background:#fde7e6;color:#c0392b}.pill.disabled{background:#eceff3;color:#67788c}
+    .pill.admin{background:#e7eefc;color:#2f5fb0}
+    .abtn{border:0;border-radius:7px;padding:4px 8px;font-size:11px;font-weight:600;cursor:pointer;margin:1px;color:#fff}
+    .abtn.ok{background:#1d9e75}.abtn.no{background:#d8504c}.abtn.mut{background:#7a8aa0}.abtn.bl{background:#2f6db0}
+    .prof-body{padding:18px 20px;background:var(--card,#fff)}
+    .prof-body h6{margin:14px 0 8px;font-size:12px;color:var(--ink2,#5a6b80);text-transform:uppercase;letter-spacing:.4px}
+    .prof-info{font-size:13px;line-height:2;color:var(--ink,#26384c);background:var(--sky,#f5f9ff);border-radius:11px;padding:12px 15px}
+    .prof-msg{font-size:12px;margin:8px 0;min-height:16px}
+    /* ---------- DARK MODE ---------- */
+    :root{--card:#fff;--line:#e6edf4;--ink:#1b2b3d;--ink2:#5a6b80;--sky:#e8f1fb}
+    body.dark{background:#0e1722;color:#d8e2ee}
+    body.dark .topbar,body.dark .ov-card,body.dark .card,body.dark .panel,body.dark section,body.dark .dash-card,body.dark .filterbar{background:#16212e !important;color:#d8e2ee}
+    body.dark{--card:#16212e;--line:#26333f;--ink:#d8e2ee;--ink2:#9fb0c2;--sky:#1c2a39}
+    body.dark .adm-table td{color:#cdd9e6}body.dark .adm-search,body.dark .adm-filters select{background:#1c2a39;color:#d8e2ee}
+    body.dark .empty,body.dark .mt,body.dark .pwhint{color:#90a2b6}
+    body.dark input,body.dark select,body.dark textarea{background:#1c2a39;color:#e3ecf5;border-color:#2c3b4c}
+  </style>
+
   <script>
-    /* ===================== UTILITIES ===================== */
+    /* ===================== ADMIN DASHBOARD ===================== */
+    let ADM_USERS = [], ADM_FILES = [], ADM_CHARTS = [];
+    function admMsgGuard() { return USER && USER.role === 'admin' && SB; }
+    async function openAdmin() {
+      if (!admMsgGuard()) return;
+      document.getElementById('adminView').style.display = 'flex';
+      switchAdminTab('kpi'); loadAdminKpis(); loadAdminUsers(); loadAdminFiles(); loadAdminActivity();
+    }
+    function closeAdmin() { document.getElementById('adminView').style.display = 'none'; ADM_CHARTS.forEach(c => { try { c.destroy(); } catch (e) { } }); ADM_CHARTS = []; }
+    function switchAdminTab(t) {
+      document.querySelectorAll('.adm-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === t));
+      [['kpi', 'admKpi'], ['users', 'admUsers'], ['files', 'admFiles'], ['activity', 'admActivity']].forEach(([k, id]) =>
+        document.getElementById(id).style.display = (k === t ? 'block' : 'none'));
+    }
+    async function rpc(fn, args) { const { data, error } = await SB.rpc(fn, args); if (error) throw error; return data; }
+    async function loadAdminKpis() {
+      try {
+        const d = await rpc('admin_kpis', { p_token: USER.token }); if (!d.ok) return;
+        const cards = [['Total Users', d.totalUsers], ['Active', d.activeUsers], ['Pending', d.pendingUsers],
+        ['Rejected', d.rejectedUsers], ['Disabled', d.disabledUsers], ['Total Uploads', d.totalUploads],
+        ['Uploads Today', d.uploadsToday], ['Total Reports', d.totalReports], ['Reports Today', d.reportsToday]];
+        document.getElementById('admKpiCards').innerHTML = cards.map(([l, v]) => `<div class="adm-kc"><div class="v">${fmtN(v || 0)}</div><div class="l">${l}</div></div>`).join('');
+        ADM_CHARTS.forEach(c => { try { c.destroy(); } catch (e) { } }); ADM_CHARTS = [];
+        const mk = (id, trend, col) => {
+          const cv = document.getElementById(id); if (!cv || typeof Chart === 'undefined') return;
+          ADM_CHARTS.push(new Chart(cv, { type: 'line', data: { labels: trend.map(x => x.day.slice(5)), datasets: [{ data: trend.map(x => +x.n), borderColor: col, backgroundColor: col + '22', fill: true, tension: .3, pointRadius: 2 }] }, options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } } }));
+        };
+        mk('admChartReg', d.regTrend || [], '#2f6db0'); mk('admChartUpl', d.uploadTrend || [], '#1d9e75'); mk('admChartRep', d.reportTrend || [], '#e6a23c');
+      } catch (e) { }
+    }
+    async function loadAdminUsers() { try { const d = await rpc('admin_list_users', { p_token: USER.token }); ADM_USERS = (d.ok && d.rows) || []; renderAdminUsers(); } catch (e) { } }
+    function renderAdminUsers() {
+      const q = (document.getElementById('admUserSearch').value || '').toLowerCase();
+      const rows = ADM_USERS.filter(u => !q || (u.name + ' ' + u.user_id + ' ' + (u.dept || '')).toLowerCase().includes(q));
+      const esc = s => String(s == null ? '' : s).replace(/[<>&"']/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]));
+      let h = '<thead><tr><th>Name</th><th>User ID</th><th>Dept</th><th>Role</th><th>Status</th><th>Last login</th><th>Actions</th></tr></thead><tbody>';
+      h += rows.map(u => {
+        const locked = u.locked_until && new Date(u.locked_until) > new Date();
+        const act = [];
+        if (u.status !== 'approved') act.push(`<button class="abtn ok" onclick="admUser('approve','${u.user_id}')">Approve</button>`);
+        if (u.status !== 'rejected') act.push(`<button class="abtn no" onclick="admUser('reject','${u.user_id}')">Reject</button>`);
+        act.push(u.status === 'disabled'
+          ? `<button class="abtn ok" onclick="admUser('enable','${u.user_id}')">Enable</button>`
+          : `<button class="abtn mut" onclick="admUser('disable','${u.user_id}')">Disable</button>`);
+        if (locked) act.push(`<button class="abtn bl" onclick="admUser('unlock','${u.user_id}')">Unlock</button>`);
+        act.push(`<button class="abtn bl" onclick="admUser('rename','${u.user_id}')">Rename</button>`);
+        act.push(`<button class="abtn bl" onclick="admUser('reset','${u.user_id}')">Reset pwd</button>`);
+        act.push(`<button class="abtn mut" onclick="admUser('role','${u.user_id}','${u.role === 'admin' ? 'user' : 'admin'}')">${u.role === 'admin' ? 'Revoke admin' : 'Make admin'}</button>`);
+        act.push(`<button class="abtn no" onclick="admUser('delete','${u.user_id}')">Delete</button>`);
+        const ll = u.last_login ? new Date(u.last_login).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
+        return `<tr><td>${esc(u.name)}</td><td>${esc(u.user_id)}</td><td>${esc(u.dept) || '—'}</td>
+          <td><span class="pill ${u.role}">${u.role}</span></td>
+          <td><span class="pill ${u.status}">${u.status}</span>${locked ? ' 🔒' : ''}</td>
+          <td>${ll}</td><td>${act.join(' ')}</td></tr>`;
+      }).join('') || '<tr><td colspan="7" style="text-align:center;padding:20px">No users.</td></tr>';
+      document.getElementById('admUsersTable').innerHTML = h + '</tbody>';
+    }
+    async function admUser(action, uid, extra) {
+      try {
+        let fn, args = { p_token: USER.token, p_user_id: uid };
+        if (action === 'approve' || action === 'reject' || action === 'disable' || action === 'enable') {
+          fn = 'admin_set_status'; args.p_status = (action === 'enable' ? 'approved' : action === 'approve' ? 'approved' : action === 'reject' ? 'rejected' : 'disabled');
+          if (!confirm(`Set ${uid} to "${args.p_status}"?`)) return;
+        } else if (action === 'unlock') { fn = 'admin_unlock_user'; }
+        else if (action === 'role') { fn = 'admin_set_role'; args.p_role = extra; if (!confirm(`Change ${uid} role to ${extra}?`)) return; }
+        else if (action === 'rename') { const nu = prompt('New User ID for ' + uid + ':'); if (!nu) return; fn = 'admin_change_username'; args.p_new_user_id = nu; }
+        else if (action === 'reset') { const np = prompt('New password (8+ chars, upper/lower/number/symbol) for ' + uid + ':'); if (!np) return; fn = 'admin_reset_password'; args.p_new_password = np; }
+        else if (action === 'delete') { if (!confirm('Permanently DELETE user ' + uid + '? This cannot be undone.')) return; fn = 'admin_delete_user'; }
+        const d = await rpc(fn, args);
+        if (!d.ok) { alert(d.error || 'Action failed.'); return; }
+        loadAdminUsers(); loadAdminKpis();
+      } catch (e) { alert('Action failed: ' + (e.message || e)); }
+    }
+    async function loadAdminFiles() { try { const d = await rpc('admin_list_uploads', { p_token: USER.token }); ADM_FILES = (d.ok && d.rows) || []; renderAdminFiles(); } catch (e) { } }
+    function renderAdminFiles() {
+      const q = (document.getElementById('admFileSearch').value || '').toLowerCase();
+      const esc = s => String(s == null ? '' : s).replace(/[<>&"']/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]));
+      const rows = ADM_FILES.filter(f => !q || (f.file_name + ' ' + (f.uploaded_by || '') + ' ' + f.report_type).toLowerCase().includes(q));
+      let h = '<thead><tr><th>File</th><th>Type</th><th>Uploaded by</th><th>Rows</th><th>Status</th><th>When</th><th></th></tr></thead><tbody>';
+      h += rows.map(f => {
+        const when = new Date(f.uploaded_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+        return `<tr><td>${esc(f.file_name)}</td><td>${esc(f.report_type)}</td><td>${esc(f.uploaded_by) || '—'}</td>
+          <td>${f.row_count ? fmtN(f.row_count) : '—'}</td><td>${esc(f.status) || 'stored'}</td><td>${when}</td>
+          <td><button class="abtn no" onclick="admDeleteFile('${f.id}')">Delete</button></td></tr>`;
+      }).join('') || '<tr><td colspan="7" style="text-align:center;padding:20px">No files.</td></tr>';
+      document.getElementById('admFilesTable').innerHTML = h + '</tbody>';
+    }
+    async function admDeleteFile(id) {
+      if (!confirm('Delete this file for everyone? This cannot be undone.')) return;
+      try { const d = await rpc('delete_upload', { p_token: USER.token, p_id: id }); if (!d.ok) { alert(d.error); return; } loadAdminFiles(); loadAdminKpis(); } catch (e) { alert('Failed: ' + (e.message || e)); }
+    }
+    async function loadAdminActivity() {
+      try {
+        const u = (document.getElementById('admActUser').value || '').trim(), a = document.getElementById('admActAction').value;
+        const d = await rpc('admin_list_activity', { p_token: USER.token, p_user: u || null, p_action: a || null, p_limit: 300 });
+        const esc = s => String(s == null ? '' : s).replace(/[<>&"']/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]));
+        const rows = (d.ok && d.rows) || [];
+        let h = '<thead><tr><th>When</th><th>User</th><th>Action</th><th>Detail</th></tr></thead><tbody>';
+        h += rows.map(r => `<tr><td>${new Date(r.created_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</td>
+          <td>${esc(r.name || r.user_id || '—')}</td><td><span class="pill ${r.action === 'login_failed' ? 'rejected' : 'admin'}">${esc(r.action)}</span></td><td>${esc(r.detail) || ''}</td></tr>`).join('')
+          || '<tr><td colspan="4" style="text-align:center;padding:20px">No activity.</td></tr>';
+        document.getElementById('admActTable').innerHTML = h + '</tbody>';
+      } catch (e) { }
+    }
+    /* ----- profile / change password ----- */
+    function pwStrength2(p) {
+      const s = pwScore(p), fill = document.getElementById('pwFill2'), hint = document.getElementById('pwHint2'); if (!fill) return;
+      fill.style.width = [0, 20, 40, 60, 80, 100][s] + '%'; fill.style.background = ['#d8504c', '#d8504c', '#e6a23c', '#e6a23c', '#3d8ad0', '#1d9e75'][s];
+      hint.textContent = ['Too weak', 'Too weak', 'Weak', 'Fair', 'Good', 'Strong'][s];
+    }
+    function openProfile() {
+      if (!USER) return;
+      document.getElementById('profInfo').innerHTML =
+        `<b>${USER.name || ''}</b><br>User ID: <b>${USER.user_id}</b><br>Role: <b>${USER.role || 'user'}</b>${USER.dept ? '<br>Department: <b>' + USER.dept + '</b>' : ''}<br>Status: <b style="color:#0f7a52">approved</b>`;
+      document.getElementById('cpOld').value = ''; document.getElementById('cpNew').value = '';
+      document.getElementById('cpMsg').textContent = ''; document.getElementById('pwFill2').style.width = '0';
+      document.getElementById('profileView').style.display = 'flex';
+    }
+    async function doChangePassword() {
+      const oldp = document.getElementById('cpOld').value, np = document.getElementById('cpNew').value, msg = document.getElementById('cpMsg');
+      if (!pwValid(np)) { msg.style.color = '#d8504c'; msg.textContent = 'New password needs 8+ chars with upper, lower, number and special character.'; return; }
+      try {
+        const d = await rpc('change_password', { p_token: USER.token, p_old: oldp, p_new: np });
+        if (!d.ok) { msg.style.color = '#d8504c'; msg.textContent = d.error || 'Failed.'; return; }
+        msg.style.color = '#0f7a52'; msg.textContent = 'Password updated successfully.';
+        document.getElementById('cpOld').value = ''; document.getElementById('cpNew').value = '';
+      } catch (e) { msg.style.color = '#d8504c'; msg.textContent = 'Failed: ' + (e.message || e); }
+    }
+    /* ----- dark / light theme ----- */
+    function applyTheme(t) { document.body.classList.toggle('dark', t === 'dark'); const b = document.getElementById('btnTheme'); if (b) b.textContent = t === 'dark' ? '☀️' : '🌙'; try { localStorage.setItem('vi_theme', t); } catch (e) { } }
+    function toggleTheme() { applyTheme(document.body.classList.contains('dark') ? 'light' : 'dark'); }
+
+
     const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     const numv = v => { const n = parseFloat(String(v).replace(/[, ]/g, '')); return isFinite(n) ? n : 0; };
     const fmtN = (n, d = 0) => Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: d, minimumFractionDigits: d });
@@ -2088,7 +2338,9 @@
     function showApp() {
       document.getElementById('authView').style.display = 'none'; document.getElementById('appRoot').style.display = 'block';
       const ini = (USER.name || USER.user_id || '?').trim().slice(0, 1).toUpperCase();
-      document.getElementById('userChip').innerHTML = `<div class="av">${ini}</div><div><div class="nm">${USER.name || USER.user_id}</div><div class="rl">Manager</div></div>`;
+      const roleLbl = USER.role === 'admin' ? 'Administrator' : (USER.dept ? USER.dept : 'Manager');
+      document.getElementById('userChip').innerHTML = `<div class="av">${ini}</div><div><div class="nm">${USER.name || USER.user_id}</div><div class="rl">${roleLbl}</div></div>`;
+      document.getElementById('btnAdmin').style.display = USER.role === 'admin' ? '' : 'none';
     }
     function swapAuth(toReg) {
       document.getElementById('loginForm').style.display = toReg ? 'none' : 'block';
@@ -2096,14 +2348,27 @@
       document.getElementById('authTitle').textContent = toReg ? 'Create Account' : 'Manager Login';
       document.getElementById('authSub').textContent = toReg ? 'Register a new manager account' : 'Sign in to access the Report Analyzer'; authMsg('');
     }
+    function pwScore(p) { let s = 0; if (!p) return 0; if (p.length >= 8) s++; if (/[A-Z]/.test(p)) s++; if (/[a-z]/.test(p)) s++; if (/[0-9]/.test(p)) s++; if (/[^A-Za-z0-9]/.test(p)) s++; return s; }
+    function pwValid(p) { return p && p.length >= 8 && /[A-Z]/.test(p) && /[a-z]/.test(p) && /[0-9]/.test(p) && /[^A-Za-z0-9]/.test(p); }
+    function pwStrength(p) {
+      const s = pwScore(p), fill = document.getElementById('pwFill'), hint = document.getElementById('pwHint'); if (!fill) return;
+      const pct = [0, 20, 40, 60, 80, 100][s], col = ['#d8504c', '#d8504c', '#e6a23c', '#e6a23c', '#3d8ad0', '#1d9e75'][s];
+      fill.style.width = pct + '%'; fill.style.background = col;
+      hint.textContent = ['Too weak', 'Too weak', 'Weak', 'Fair', 'Good', 'Strong password'][s];
+      hint.style.color = s >= 4 ? '#1d9e75' : (s >= 2 ? '#b07d1a' : '#d8504c');
+    }
     async function doRegister() {
       if (!SB) { authMsg('Supabase is not configured.', 'err'); return; }
-      const name = document.getElementById('rgName').value.trim(), uid = document.getElementById('rgUser').value.trim(), pass = document.getElementById('rgPass').value;
-      if (!name || !uid || pass.length < 4) { authMsg('Enter name, user ID and a password (min 4 chars).', 'err'); return; }
+      const name = document.getElementById('rgName').value.trim(), uid = document.getElementById('rgUser').value.trim(),
+        pass = document.getElementById('rgPass').value, dept = document.getElementById('rgDept').value;
+      if (!name || !uid) { authMsg('Enter your name and User ID.', 'err'); return; }
+      if (!pwValid(pass)) { authMsg('Password needs 8+ chars with an uppercase, lowercase, number and special character.', 'err'); return; }
       const b = document.getElementById('rgBtn'); b.disabled = true; b.textContent = 'Creating…';
       try {
-        const { data, error } = await SB.rpc('register_user', { p_name: name, p_user_id: uid, p_password: pass }); if (error) throw error;
-        if (!data.ok) authMsg(data.error, 'err'); else { authMsg('Account created — please log in.', 'ok'); swapAuth(false); document.getElementById('liUser').value = data.user_id; document.getElementById('liPass').focus(); }
+        const { data, error } = await SB.rpc('register_user', { p_name: name, p_user_id: uid, p_password: pass, p_dept: dept || null }); if (error) throw error;
+        if (!data.ok) authMsg(data.error, 'err');
+        else if (data.first) { authMsg('Admin account created — you can log in now.', 'ok'); swapAuth(false); document.getElementById('liUser').value = data.user_id; document.getElementById('liPass').focus(); }
+        else { authMsg('Account created. An administrator must approve it before you can log in.', 'ok'); swapAuth(false); document.getElementById('liUser').value = data.user_id; }
       } catch (e) { authMsg('Could not register: ' + (e.message || e), 'err'); } b.disabled = false; b.textContent = 'Create account';
     }
     async function doLogin() {
@@ -2113,12 +2378,14 @@
       const b = document.getElementById('liBtn'); b.disabled = true; b.textContent = 'Signing in…';
       try {
         const { data, error } = await SB.rpc('login_user', { p_user_id: uid, p_password: pass }); if (error) throw error;
-        if (!data.ok) authMsg(data.error, 'err'); else { setSession({ name: data.name, user_id: data.user_id, token: data.token }); showApp(); }
+        if (!data.ok) authMsg(data.error, 'err'); else { setSession({ name: data.name, user_id: data.user_id, token: data.token, role: data.role, dept: data.dept }); showApp(); }
       } catch (e) { authMsg('Could not log in: ' + (e.message || e), 'err'); } b.disabled = false; b.textContent = 'Login';
     }
-    function doLogout() {
+    async function doLogout() {
+      try { if (SB && USER && USER.token) await SB.rpc('logout_user', { p_token: USER.token }); } catch (e) { }
       setSession(null); reset(); document.getElementById('selectView').style.display = 'block';
       document.getElementById('uploadView').style.display = 'none'; document.getElementById('dashView').style.display = 'none';
+      const av = document.getElementById('adminView'); if (av) av.style.display = 'none';
       CURRENT = null; PROC = null; showAuth(); document.getElementById('liPass').value = '';
     }
     async function initAuth() {
@@ -2126,7 +2393,7 @@
       if (USER && USER.token && SB) {
         try {
           const { data } = await SB.rpc('whoami', { p_token: USER.token });
-          if (data && data.ok) { USER.name = data.name; USER.user_id = data.user_id; setSession(USER); showApp(); return; }
+          if (data && data.ok) { USER.name = data.name; USER.user_id = data.user_id; USER.role = data.role; USER.dept = data.dept; setSession(USER); showApp(); return; }
         } catch (e) { }
       }
       setSession(null); showAuth();
@@ -2153,25 +2420,27 @@
     let RECENT = {};
     async function loadRecent(reportType) {
       const wrap = document.getElementById('recentWrap'), list = document.getElementById('recentList');
-      if (!SB) { wrap.style.display = 'none'; return; } wrap.style.display = 'block'; list.innerHTML = '<div class="empty">Loading…</div>';
+      if (!SB || !USER) { wrap.style.display = 'none'; return; } wrap.style.display = 'block'; list.innerHTML = '<div class="empty">Loading…</div>';
       try {
-        const { data, error } = await SB.from('uploads').select('*').eq('report_type', reportType).order('uploaded_at', { ascending: false }).limit(10);
+        // Owner-scoped: server returns ONLY this user's uploads (direct table reads are denied by RLS).
+        const { data, error } = await SB.rpc('list_my_uploads', { p_token: USER.token, p_report_type: reportType });
         if (error) throw error;
-        if (!data.length) { list.innerHTML = '<div class="empty">No uploads yet for this report.</div>'; return; }
-        RECENT = {}; data.forEach(u => RECENT[u.id] = u);
-        list.innerHTML = data.map(u => {
+        if (!data || !data.ok) { list.innerHTML = '<div class="empty">Could not load history.</div>'; return; }
+        const rows = (data.rows || []).slice(0, 10);
+        if (!rows.length) { list.innerHTML = '<div class="empty">No uploads yet for this report.</div>'; return; }
+        RECENT = {}; rows.forEach(u => RECENT[u.id] = u);
+        list.innerHTML = rows.map(u => {
           const ext = (String(u.file_name).split('.').pop() || '').slice(0, 4).toUpperCase();
           const when = new Date(u.uploaded_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
           const sz = u.file_size ? (u.file_size > 1048576 ? (u.file_size / 1048576).toFixed(1) + ' MB' : Math.round(u.file_size / 1024) + ' KB') : '';
-          const isOwner = USER && u.uploaded_by_id && u.uploaded_by_id === USER.user_id;
           const stored = !!u.storage_path;
           const dis = stored ? '' : 'disabled title="File not stored (too large) — metadata only"';
           const view = `<button class="rbtn view" ${dis} onclick="viewUpload('${u.id}')">▣ View</button>`;
           const dl = `<button class="rbtn dl" ${dis} onclick="downloadUpload('${u.id}')">⬇ Download</button>`;
-          const del = isOwner ? `<button class="del" title="Delete (you uploaded this)" onclick="deleteUpload('${u.id}','${reportType}')">🗑</button>` : '';
+          const del = `<button class="del" title="Delete" onclick="deleteUpload('${u.id}','${reportType}')">🗑</button>`;
           return `<div class="row"><div class="fi">${ext}</div>
         <div class="meta"><div class="fn plain">${u.file_name}</div>
-          <div class="mt">${u.uploaded_by || '—'} · ${when}${u.row_count ? (' · ' + fmtN(u.row_count) + ' rows') : ''}${sz ? (' · ' + sz) : ''}${isOwner ? ' · <b style="color:#0f5e45">you</b>' : ''}</div></div>
+          <div class="mt">${u.uploaded_by || '—'} · ${when}${u.row_count ? (' · ' + fmtN(u.row_count) + ' rows') : ''}${sz ? (' · ' + sz) : ''} · <b style="color:#0f5e45">you</b></div></div>
         <div class="ract">${view}${dl}${del}</div></div>`;
         }).join('');
       } catch (e) { list.innerHTML = '<div class="empty">Could not load history.</div>'; }
@@ -3015,6 +3284,7 @@
           if (PROC.exportExcel) { await PROC.exportExcel(fn); }
           else { await styledExcel(PROC, VIEW, fn); }
           setMsg(`<b>Excel report generated.</b> ${PROC.exportExcel ? 'Full 8-section summary layout.' : fmtN(VIEW.length) + ' rows, fully formatted.'}`, 'ok');
+          try { if (SB && USER && USER.token) await SB.rpc('log_report', { p_token: USER.token, p_report_type: CURRENT, p_report_name: fn }); } catch (e) { }
         }
         catch (e) { setMsg('Could not build Excel: ' + (e.message || e), 'err'); } hideLoad();
       }, 120);
@@ -3059,7 +3329,7 @@
       const ad = $('ftrAddr'); if (ad) ad.textContent = COMPANY.address;
       $('ftrYear').textContent = new Date().getFullYear();
       const ver = $('ftrVer'); if (ver) ver.textContent = 'Version ' + APP_VERSION;
-      const upd = $('ftrUpd'); if (upd) upd.textContent = 'Updated on 21 June 2026';
+      const upd = $('ftrUpd'); if (upd) upd.textContent = 'Updated on 24 June 2026';
     }
 
     /* ----- wire-up ----- */
@@ -3078,6 +3348,15 @@
     document.getElementById('toLogin').onclick = () => swapAuth(false);
     document.getElementById('liBtn').onclick = doLogin; document.getElementById('rgBtn').onclick = doRegister;
     document.getElementById('btnLogout').onclick = doLogout;
+    document.getElementById('btnAdmin').onclick = openAdmin;
+    document.getElementById('admClose').onclick = closeAdmin;
+    document.querySelectorAll('.adm-tab').forEach(b => b.onclick = () => switchAdminTab(b.dataset.tab));
+    document.getElementById('btnProfile').onclick = openProfile;
+    document.getElementById('profClose').onclick = () => document.getElementById('profileView').style.display = 'none';
+    document.getElementById('cpBtn').onclick = doChangePassword;
+    document.getElementById('btnTheme').onclick = toggleTheme;
+    document.querySelectorAll('.overlay').forEach(o => o.addEventListener('click', e => { if (e.target === o) o.style.display = 'none'; }));
+    try { applyTheme(localStorage.getItem('vi_theme') || 'light'); } catch (e) { }
     document.getElementById('liPass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
     document.getElementById('rgPass').addEventListener('keydown', e => { if (e.key === 'Enter') doRegister(); });
     initAuth();
