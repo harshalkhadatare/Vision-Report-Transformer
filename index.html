@@ -1912,12 +1912,15 @@
         <div class="auth-field"><label>Department <span style="opacity:.6">(optional)</span></label>
           <select id="rgDept">
             <option value="">— Select —</option>
-            <option>Accounts</option><option>Purchase</option><option>HR</option>
-            <option>Admin</option><option>Operations</option><option>Management</option><option>IT</option>
-          </select></div>
+            <option>Operations</option>
+            <option>Management</option>
+          </select>
+        </div>
         <div class="auth-field"><label>Password</label><input id="rgPass" type="password" autocomplete="new-password"
             placeholder="minimum 4 characters" oninput="pwStrength(this.value)">
-          <div class="pwbar"><i id="pwFill"></i></div><div class="pwhint" id="pwHint">Use at least 4 characters.</div></div>
+          <div class="pwbar"><i id="pwFill"></i></div>
+          <div class="pwhint" id="pwHint">Use at least 4 characters.</div>
+        </div>
         <button class="auth-btn" id="rgBtn">Create account</button>
         <div class="auth-switch">Already registered? <button id="toLogin">Back to login</button></div>
       </div>
@@ -2064,29 +2067,53 @@
         <div class="adm-pane" id="admKpi">
           <div class="adm-kpis" id="admKpiCards"></div>
           <div class="adm-charts">
-            <div class="adm-chart"><h6>User Registrations (14d)</h6><canvas id="admChartReg" height="150"></canvas></div>
-            <div class="adm-chart"><h6>File Uploads (14d)</h6><canvas id="admChartUpl" height="150"></canvas></div>
-            <div class="adm-chart"><h6>Reports Generated (14d)</h6><canvas id="admChartRep" height="150"></canvas></div>
+            <div class="adm-chart">
+              <h6>User Registrations (14d)</h6><canvas id="admChartReg" height="150"></canvas>
+            </div>
+            <div class="adm-chart">
+              <h6>File Uploads (14d)</h6><canvas id="admChartUpl" height="150"></canvas>
+            </div>
+            <div class="adm-chart">
+              <h6>Reports Generated (14d)</h6><canvas id="admChartRep" height="150"></canvas>
+            </div>
           </div>
         </div>
         <div class="adm-pane" id="admUsers" style="display:none">
-          <input class="adm-search" id="admUserSearch" placeholder="Search name / user ID / department…" oninput="renderAdminUsers()">
-          <div class="adm-tablewrap"><table class="adm-table" id="admUsersTable"></table></div>
+          <input class="adm-search" id="admUserSearch" placeholder="Search name / user ID / department…"
+            oninput="renderAdminUsers()">
+          <div class="adm-tablewrap">
+            <table class="adm-table" id="admUsersTable"></table>
+          </div>
         </div>
         <div class="adm-pane" id="admFiles" style="display:none">
-          <input class="adm-search" id="admFileSearch" placeholder="Search file / uploader / type…" oninput="renderAdminFiles()">
-          <div class="adm-tablewrap"><table class="adm-table" id="admFilesTable"></table></div>
+          <input class="adm-search" id="admFileSearch" placeholder="Search file / uploader / type…"
+            oninput="renderAdminFiles()">
+          <div class="adm-tablewrap">
+            <table class="adm-table" id="admFilesTable"></table>
+          </div>
         </div>
         <div class="adm-pane" id="admActivity" style="display:none">
           <div class="adm-filters">
             <input class="adm-search" id="admActUser" placeholder="Filter by User ID…">
-            <select id="admActAction"><option value="">All actions</option>
-              <option>login</option><option>logout</option><option>register</option><option>login_failed</option>
-              <option>approve</option><option>reject</option><option>upload</option><option>delete_file</option>
-              <option>report</option><option>password_change</option><option>password_reset</option></select>
+            <select id="admActAction">
+              <option value="">All actions</option>
+              <option>login</option>
+              <option>logout</option>
+              <option>register</option>
+              <option>login_failed</option>
+              <option>approve</option>
+              <option>reject</option>
+              <option>upload</option>
+              <option>delete_file</option>
+              <option>report</option>
+              <option>password_change</option>
+              <option>password_reset</option>
+            </select>
             <button class="btn btn-ghost" onclick="loadAdminActivity()">Apply</button>
           </div>
-          <div class="adm-tablewrap"><table class="adm-table" id="admActTable"></table></div>
+          <div class="adm-tablewrap">
+            <table class="adm-table" id="admActTable"></table>
+          </div>
         </div>
       </div>
     </div>
@@ -2099,9 +2126,13 @@
       <div class="prof-body">
         <div id="profInfo" class="prof-info"></div>
         <h6>Change Password</h6>
-        <div class="auth-field"><label>Current password</label><input id="cpOld" type="password" autocomplete="current-password"></div>
-        <div class="auth-field"><label>New password</label><input id="cpNew" type="password" autocomplete="new-password" oninput="pwStrength2(this.value)" placeholder="minimum 4 characters">
-          <div class="pwbar"><i id="pwFill2"></i></div><div class="pwhint" id="pwHint2"></div></div>
+        <div class="auth-field"><label>Current password</label><input id="cpOld" type="password"
+            autocomplete="current-password" placeholder="Current password"></div>
+        <div class="auth-field"><label>New password</label><input id="cpNew" type="password" autocomplete="new-password"
+            oninput="pwStrength2(this.value)" placeholder="New password (minimum 4 characters)">
+          <div class="pwbar"><i id="pwFill2"></i></div>
+          <div class="pwhint" id="pwHint2"></div>
+        </div>
         <div class="prof-msg" id="cpMsg"></div>
         <button class="auth-btn" id="cpBtn" style="margin-top:6px">Update password</button>
       </div>
@@ -2109,46 +2140,319 @@
   </div>
 
   <style>
-    .pwbar{height:5px;border-radius:4px;background:#e3e9f0;margin-top:7px;overflow:hidden}
-    .pwbar i{display:block;height:100%;width:0;background:#d8504c;border-radius:4px;transition:width .25s,background .25s}
-    .pwhint{font-size:11px;margin-top:4px;color:#7a8aa0}
-    .overlay{position:fixed;inset:0;z-index:120;background:rgba(10,20,35,.55);backdrop-filter:blur(3px);display:flex;align-items:flex-start;justify-content:center;padding:34px 16px;overflow:auto}
-    .ov-card{background:var(--card,#fff);width:100%;max-width:480px;border-radius:18px;box-shadow:0 30px 80px rgba(0,0,0,.4);overflow:hidden}
-    .ov-wide{max-width:1080px}
-    .ov-head{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;background:linear-gradient(135deg,#163a5c,#0e2a43);color:#fff}
-    .ov-head b{font-size:16px}
-    .ov-x{background:rgba(255,255,255,.16);border:0;color:#fff;width:30px;height:30px;border-radius:9px;cursor:pointer;font-size:14px}
-    .ov-x:hover{background:rgba(255,255,255,.3)}
-    .adm-tabs{display:flex;gap:4px;padding:12px 16px 0;background:var(--card,#fff);border-bottom:1px solid var(--line,#e6edf4)}
-    .adm-tab{border:0;background:transparent;padding:9px 16px;border-radius:9px 9px 0 0;cursor:pointer;font-weight:600;font-size:13px;color:var(--ink2,#5a6b80)}
-    .adm-tab.active{background:var(--sky,#e8f1fb);color:var(--steel,#2f6db0)}
-    .adm-body{padding:18px 20px;max-height:72vh;overflow:auto;background:var(--card,#fff)}
-    .adm-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:20px}
-    .adm-kc{background:var(--sky,#f3f8ff);border:1px solid var(--line,#e3edf8);border-radius:13px;padding:14px 16px}
-    .adm-kc .v{font-size:24px;font-weight:800;color:var(--navy2,#163a5c)}
-    .adm-kc .l{font-size:11px;color:var(--ink2,#6a7c92);text-transform:uppercase;letter-spacing:.4px;margin-top:3px;font-weight:600}
-    .adm-charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
-    .adm-chart{border:1px solid var(--line,#e6edf4);border-radius:13px;padding:12px}
-    .adm-chart h6{margin:0 0 8px;font-size:12px;color:var(--ink2,#5a6b80)}
-    .adm-search{width:100%;padding:9px 12px;border:1px solid var(--line,#d8e2ee);border-radius:10px;margin-bottom:12px;font-size:13px;background:var(--card,#fff);color:var(--ink,#1b2b3d)}
-    .adm-filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
-    .adm-filters .adm-search{margin:0;flex:1;min-width:160px}.adm-filters select{padding:9px 12px;border:1px solid var(--line,#d8e2ee);border-radius:10px}
-    .adm-tablewrap{overflow:auto;border:1px solid var(--line,#e6edf4);border-radius:12px}
-    .adm-table{width:100%;border-collapse:collapse;font-size:12.5px;min-width:560px}
-    .adm-table th{background:var(--navy2,#163a5c);color:#fff;text-align:left;padding:9px 11px;position:sticky;top:0;font-weight:600}
-    .adm-table td{padding:8px 11px;border-bottom:1px solid var(--line,#eef3f8);color:var(--ink,#26384c)}
-    .adm-table tr:hover td{background:var(--sky,#f6faff)}
-    .pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700}
-    .pill.approved{background:#e3f6ee;color:#0f7a52}.pill.pending{background:#fff3da;color:#9a6a12}
-    .pill.rejected{background:#fde7e6;color:#c0392b}.pill.disabled{background:#eceff3;color:#67788c}
-    .pill.admin{background:#e7eefc;color:#2f5fb0}
-    .abtn{border:0;border-radius:7px;padding:4px 8px;font-size:11px;font-weight:600;cursor:pointer;margin:1px;color:#fff}
-    .abtn.ok{background:#1d9e75}.abtn.no{background:#d8504c}.abtn.mut{background:#7a8aa0}.abtn.bl{background:#2f6db0}
-    .prof-body{padding:18px 20px;background:var(--card,#fff)}
-    .prof-body h6{margin:14px 0 8px;font-size:12px;color:var(--ink2,#5a6b80);text-transform:uppercase;letter-spacing:.4px}
-    .prof-info{font-size:13px;line-height:2;color:var(--ink,#26384c);background:var(--sky,#f5f9ff);border-radius:11px;padding:12px 15px}
-    .prof-msg{font-size:12px;margin:8px 0;min-height:16px}
-    :root{--card:#fff;--line:#e6edf4;--ink:#1b2b3d;--ink2:#5a6b80;--sky:#e8f1fb}
+    .pwbar {
+      height: 5px;
+      border-radius: 4px;
+      background: #e3e9f0;
+      margin-top: 7px;
+      overflow: hidden
+    }
+
+    .pwbar i {
+      display: block;
+      height: 100%;
+      width: 0;
+      background: #d8504c;
+      border-radius: 4px;
+      transition: width .25s, background .25s
+    }
+
+    .pwhint {
+      font-size: 11px;
+      margin-top: 4px;
+      color: #7a8aa0
+    }
+
+    .overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 120;
+      background: rgba(10, 20, 35, .55);
+      backdrop-filter: blur(3px);
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 34px 16px;
+      overflow: auto
+    }
+
+    .ov-card {
+      background: var(--card, #fff);
+      width: 100%;
+      max-width: 480px;
+      border-radius: 18px;
+      box-shadow: 0 30px 80px rgba(0, 0, 0, .4);
+      overflow: hidden
+    }
+
+    .ov-wide {
+      max-width: 1080px
+    }
+
+    .ov-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      background: linear-gradient(135deg, #163a5c, #0e2a43);
+      color: #fff
+    }
+
+    .ov-head b {
+      font-size: 16px
+    }
+
+    .ov-x {
+      background: rgba(255, 255, 255, .16);
+      border: 0;
+      color: #fff;
+      width: 30px;
+      height: 30px;
+      border-radius: 9px;
+      cursor: pointer;
+      font-size: 14px
+    }
+
+    .ov-x:hover {
+      background: rgba(255, 255, 255, .3)
+    }
+
+    .adm-tabs {
+      display: flex;
+      gap: 4px;
+      padding: 12px 16px 0;
+      background: var(--card, #fff);
+      border-bottom: 1px solid var(--line, #e6edf4)
+    }
+
+    .adm-tab {
+      border: 0;
+      background: transparent;
+      padding: 9px 16px;
+      border-radius: 9px 9px 0 0;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 13px;
+      color: var(--ink2, #5a6b80)
+    }
+
+    .adm-tab.active {
+      background: var(--sky, #e8f1fb);
+      color: var(--steel, #2f6db0)
+    }
+
+    .adm-body {
+      padding: 18px 20px;
+      max-height: 72vh;
+      overflow: auto;
+      background: var(--card, #fff)
+    }
+
+    .adm-kpis {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px;
+      margin-bottom: 20px
+    }
+
+    .adm-kc {
+      background: var(--sky, #f3f8ff);
+      border: 1px solid var(--line, #e3edf8);
+      border-radius: 13px;
+      padding: 14px 16px
+    }
+
+    .adm-kc .v {
+      font-size: 24px;
+      font-weight: 800;
+      color: var(--navy2, #163a5c)
+    }
+
+    .adm-kc .l {
+      font-size: 11px;
+      color: var(--ink2, #6a7c92);
+      text-transform: uppercase;
+      letter-spacing: .4px;
+      margin-top: 3px;
+      font-weight: 600
+    }
+
+    .adm-charts {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px
+    }
+
+    .adm-chart {
+      border: 1px solid var(--line, #e6edf4);
+      border-radius: 13px;
+      padding: 12px
+    }
+
+    .adm-chart h6 {
+      margin: 0 0 8px;
+      font-size: 12px;
+      color: var(--ink2, #5a6b80)
+    }
+
+    .adm-search {
+      width: 100%;
+      padding: 9px 12px;
+      border: 1px solid var(--line, #d8e2ee);
+      border-radius: 10px;
+      margin-bottom: 12px;
+      font-size: 13px;
+      background: var(--card, #fff);
+      color: var(--ink, #1b2b3d)
+    }
+
+    .adm-filters {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 12px
+    }
+
+    .adm-filters .adm-search {
+      margin: 0;
+      flex: 1;
+      min-width: 160px
+    }
+
+    .adm-filters select {
+      padding: 9px 12px;
+      border: 1px solid var(--line, #d8e2ee);
+      border-radius: 10px
+    }
+
+    .adm-tablewrap {
+      overflow: auto;
+      border: 1px solid var(--line, #e6edf4);
+      border-radius: 12px
+    }
+
+    .adm-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12.5px;
+      min-width: 560px
+    }
+
+    .adm-table th {
+      background: var(--navy2, #163a5c);
+      color: #fff;
+      text-align: left;
+      padding: 9px 11px;
+      position: sticky;
+      top: 0;
+      font-weight: 600
+    }
+
+    .adm-table td {
+      padding: 8px 11px;
+      border-bottom: 1px solid var(--line, #eef3f8);
+      color: var(--ink, #26384c)
+    }
+
+    .adm-table tr:hover td {
+      background: var(--sky, #f6faff)
+    }
+
+    .pill {
+      display: inline-block;
+      padding: 2px 9px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 700
+    }
+
+    .pill.approved {
+      background: #e3f6ee;
+      color: #0f7a52
+    }
+
+    .pill.pending {
+      background: #fff3da;
+      color: #9a6a12
+    }
+
+    .pill.rejected {
+      background: #fde7e6;
+      color: #c0392b
+    }
+
+    .pill.disabled {
+      background: #eceff3;
+      color: #67788c
+    }
+
+    .pill.admin {
+      background: #e7eefc;
+      color: #2f5fb0
+    }
+
+    .abtn {
+      border: 0;
+      border-radius: 7px;
+      padding: 4px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      margin: 1px;
+      color: #fff
+    }
+
+    .abtn.ok {
+      background: #1d9e75
+    }
+
+    .abtn.no {
+      background: #d8504c
+    }
+
+    .abtn.mut {
+      background: #7a8aa0
+    }
+
+    .abtn.bl {
+      background: #2f6db0
+    }
+
+    .prof-body {
+      padding: 18px 20px;
+      background: var(--card, #fff)
+    }
+
+    .prof-body h6 {
+      margin: 14px 0 8px;
+      font-size: 12px;
+      color: var(--ink2, #5a6b80);
+      text-transform: uppercase;
+      letter-spacing: .4px
+    }
+
+    .prof-info {
+      font-size: 13px;
+      line-height: 2;
+      color: var(--ink, #26384c);
+      background: var(--sky, #f5f9ff);
+      border-radius: 11px;
+      padding: 12px 15px
+    }
+
+    .prof-msg {
+      font-size: 12px;
+      margin: 8px 0;
+      min-height: 16px
+    }
+
+    :root {
+      --card: #fff;
+      --line: #e6edf4;
+      --ink: #1b2b3d;
+      --ink2: #5a6b80;
+      --sky: #e8f1fb
+    }
   </style>
 
   <script>
