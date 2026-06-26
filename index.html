@@ -2957,6 +2957,9 @@
       function kpis(view) {
         const cv = sumBy(view, 'closeVal'), itemCodes = new Set(view.map(r => r.itemCode)).size;
         return [
+          ['Opening Stock Value', crore(sumBy(view, 'itemYear')), 'item year value', '#8a5a06'],
+          ['Total Receipt Value', crore(sumBy(view, 'receiptVal')), 'inward value', '#1d9e75'],
+          ['Total Issue Value', crore(Math.abs(sumBy(view, 'issueVal'))), 'outward value', '#d8504c'],
           ['Closing Stock Value', crore(cv), 'sum of closing value', '#1d9e75'],
           ['Total Stock Quantity', fmtN(sumBy(view, 'closeQty')), 'closing qty', '#2f6db0'],
           ['Total Item Codes', fmtN(itemCodes), 'distinct items', '#163a5c'],
@@ -2964,11 +2967,9 @@
           ['Active Sites', fmtN(distinct(view, 'site')), 'locations', '#7c5cbf'],
           ['Active Divisions', fmtN(distinct(view, 'division')), 'fleet types', '#b45309'],
           ['Active Departments', fmtN(distinct(view, 'department')), 'fleet makes', '#475569'],
-          ['Active Categories', fmtN(distinct(view, 'category')), 'item classes', '#0a66c2'],
-          ['Opening Stock Value', crore(sumBy(view, 'itemYear')), 'item year value', '#8a5a06'],
-          ['Total Receipt Value', crore(sumBy(view, 'receiptVal')), 'inward value', '#1d9e75'],
-          ['Total Issue Value', crore(Math.abs(sumBy(view, 'issueVal'))), 'outward value', '#d8504c'],
-          ['Avg Stock Value / Item', crore(itemCodes ? cv / itemCodes : 0), 'closing \u00f7 items', '#2f6db0']
+          ['Active Categories', fmtN(distinct(view, 'category')), 'item classes', '#0a66c2']
+          
+          
         ];
       }
       function charts(view) {
