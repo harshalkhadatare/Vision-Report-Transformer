@@ -25,7 +25,7 @@
       email: "info@visioninfraindia.com",                                                    /* EDIT */
       website: "https://www.visioninfraindia.com/"                                            /* EDIT */
     };
-    const APP_VERSION = "4.1";   /* dashboard build version shown in footer */
+    const APP_VERSION = "5.1";   /* dashboard build version shown in footer */
   </script>
   <style>
     :root {
@@ -1935,14 +1935,14 @@
         </div>
         <div class="actions">
 
-          <button class="btn btn-ghost" id="btnReset" disabled><span class="lbl">New</span> ↺</button>
-          <button class="btn btn-ghost" id="btnCsv" disabled>⬇ <span class="lbl">CSV</span></button>
-          <button class="btn btn-ghost" id="btnPdf" disabled>⬇ <span class="lbl">PDF</span></button>
-          <button class="btn btn-green" id="btnXlsx" disabled>⬇ Excel report</button>
-          <button class="btn btn-ghost" id="btnAdmin" style="display:none" title="Admin dashboard">🛡 Admin</button>
-          <button class="btn btn-ghost" id="btnProfile" title="My profile">👤</button>
-          <button class="btn btn-ghost" id="btnLogout">Logout</button>
-          <div class="userchip" id="userChip"></div>
+          <button class="btn btn-ghost" id="btnReset" title="Upload new file" disabled><span class="lbl">New</span> ↺</button>
+          <button class="btn btn-ghost" id="btnCsv" title="Export as CSV" disabled>⬇ <span class="lbl">CSV</span></button>
+          <button class="btn btn-ghost" id="btnPdf" title="Export as PDF" disabled>⬇ <span class="lbl">PDF</span></button>
+          <button class="btn btn-green" id="btnXlsx" title="Export as Excel" disabled>⬇ Excel report</button>
+          <button class="btn btn-ghost" id="btnAdmin" style="display:none" title="Admin dashboard">Admin</button>
+          <button class="btn btn-ghost" id="btnProfile" title="My profile">My profile</button>
+          <button class="btn btn-ghost" id="btnLogout" title="Logout">Logout</button>
+          <div class="userchip" id="userChip" title="My profile"></div>
         </div>
       </div>
     </header>
@@ -2048,7 +2048,8 @@
           </div>
         </div>
       </div>
-      <div class="ftr-bottom">© <span id="ftrYear"></span> <span id="ftrName2"></span> · Report Analyzer · Designed &amp; Developed by Harshal Khadatare
+      <div class="ftr-bottom">© <span id="ftrYear"></span> <span id="ftrName2"></span> · Report Analyzer · Designed
+        &amp; Developed by Harshal Khadatare
       </div>
     </footer>
   </div><!-- /appRoot -->
@@ -2897,7 +2898,7 @@
       const filters = [{ key: 'month', label: 'Month / Year' }, { key: 'dept', label: 'Department', multi: true }, { key: 'client', label: 'Client' }];
       return {
         meta: {
-          name: 'P&M Report Analyzer', tagline: 'Daily equipment logsheet → utilisation & deployment summary',
+          name: 'P&M Rental Report', tagline: 'Daily equipment logsheet → utilisation & deployment summary → Upload ERP dump as it is.',
           icon: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13l2-5h14l2 5"/><path d="M5 13h14v5H5z"/><circle cx="7.5" cy="18.5" r="1.5"/><circle cx="16.5" cy="18.5" r="1.5"/></svg>'
         },
         hint: 'Upload the raw daily logsheet (equipmentnumber, date, status, running_hrs) or a workbook with a <b>Master</b> sheet. Large legacy <b>.xls</b> read best if you Save As <b>.xlsx</b> first.',
@@ -2968,8 +2969,6 @@
           ['Active Divisions', fmtN(distinct(view, 'division')), 'fleet types', '#b45309'],
           ['Active Departments', fmtN(distinct(view, 'department')), 'fleet makes', '#475569'],
           ['Active Categories', fmtN(distinct(view, 'category')), 'item classes', '#0a66c2']
-          
-          
         ];
       }
       function charts(view) {
@@ -3083,7 +3082,7 @@
 
       return {
         meta: {
-          name: 'Stock Report', tagline: 'Inventory stock \u2014 closing value by site & category',
+          name: 'Stock Report - Beta Version', tagline: 'Inventory stock \u2014 closing value by site & category',
           icon: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>'
         },
         hint: 'Upload the ERP <b>stock dump</b> (workbook with a <b>Master sheet</b>: Item Code, Closing Value, Location Name, Item Class\u2026). Search by Item Code, filter by site / division / category \u2014 KPIs &amp; charts update live in <b>\u20b9 Cr</b>. The Excel export gives <b>Summery01</b> (by site) and <b>Summery02</b> (by category &amp; AC class).',
@@ -3741,7 +3740,7 @@
       const ad = $('ftrAddr'); if (ad) ad.textContent = COMPANY.address;
       $('ftrYear').textContent = new Date().getFullYear();
       const ver = $('ftrVer'); if (ver) ver.textContent = 'Version ' + APP_VERSION;
-      const upd = $('ftrUpd'); if (upd) upd.textContent = 'Updated on 24 June 2026';
+      const upd = $('ftrUpd'); if (upd) upd.textContent = 'Updated on 26 June 2026';
     }
 
     /* ----- wire-up ----- */
