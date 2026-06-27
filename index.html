@@ -3908,6 +3908,110 @@
 
       // ---- Knowledge base ----
       const REPLY = (...a) => a;   // alt phrasings (anti-repetition cycles through)
+      /* ── Employee directory (from emp-details.xlsx) ── */
+      const EMP_RAW = [
+        {id:'14248',name:'Samar Biswas',desig:'Officer',dept:'Roller'},
+        {id:'15106',name:'Tanmay Yashwant Bedekar',desig:'Jr. Officer',dept:'Purchase'},
+        {id:'15149',name:'Vaibhav Dipak Pandit',desig:'Jr. Engineer',dept:'Asphalt Paver'},
+        {id:'15442',name:'Diwakar Kumar Pandey',desig:'Jr. Officer',dept:'Roller'},
+        {id:'15458',name:'Hiray Pushpak Dashrath',desig:'Officer',dept:'General Asset'},
+        {id:'15533',name:'Vishal Ashok Shelke',desig:'Jr. Officer',dept:'Contract'},
+        {id:'15634',name:'Shubham Santosh Potekar',desig:'Officer',dept:'General Asset'},
+        {id:'15853',name:'Rajat Rohit Takmoge',desig:'GET',dept:'Contract'},
+        {id:'15862',name:'Anshuman Barik',desig:'Executive',dept:'Concrete Paver'},
+        {id:'15996',name:'Rohit Kumar Mishra',desig:'Sr Officer',dept:'Roller'},
+        {id:'16263',name:'Nitish Kumar Singh',desig:'DET',dept:'Milling'},
+        {id:'16264',name:'Sandesh Sambhaji Dighe',desig:'Admin Assistant',dept:'Admin'},
+        {id:'16453',name:'Pruthviraj Haridas Wakchaure',desig:'Jr. Officer',dept:'Contract'},
+        {id:'16532',name:'Narendra Narayan Kathare',desig:'Assistant',dept:'HR'},
+        {id:'16641',name:'Dhaval Vijay Neve',desig:'Junior Officer',dept:'Contract'},
+        {id:'16812',name:'Atharv Dattatraya Shinde',desig:'Digital Executive',dept:'P&M'},
+        {id:'16813',name:'Purnima Pradhan',desig:'Officer',dept:'Excavator & Wheel loader'},
+        {id:'21046',name:'Nikhil Virendra Chavan',desig:'Asst. Purchase Manager',dept:'Purchase'},
+        {id:'21084',name:'Tulala Ashok Kumar Choudary',desig:'Sr. Engineer',dept:'Asphalt Paver'},
+        {id:'21089',name:'Balaji Mahadev Pawar',desig:'Jr. Engineer',dept:'Milling'},
+        {id:'21207',name:'Priyanath Paul',desig:'Jr. Engineer',dept:'General Asset'},
+        {id:'21234',name:'Eknath Laxman Mahale',desig:'Manager',dept:'Asphalt Paver'},
+        {id:'21266',name:'Suraj Sudam Gadekar',desig:'Jr Accountant',dept:'Accounts'},
+        {id:'21275',name:'Vishal Sudhakar Bhawar',desig:'Engineer',dept:'Milling'},
+        {id:'21284',name:'Arabindo Majumder',desig:'Senior Officer',dept:'HR'},
+        {id:'21294',name:'Akhil R V',desig:'Asst. Manager',dept:'P&M'},
+        {id:'21371',name:'Rajendra Janardan Ghumare',desig:'General Manager',dept:'P&M'},
+        {id:'21379',name:'Akashay Bhaurao Mankar',desig:'Engineer',dept:'Contract'},
+        {id:'21391',name:'Balkrushna Shankar Bhagat',desig:'Manager',dept:'Concrete Paver'},
+        {id:'21399',name:'Milind Prabhakar Sali',desig:'Assistant Manager',dept:'Milling'},
+        {id:'21402',name:'Sanjay Ganpat Shinde',desig:'Assistant Manager',dept:'Contract'},
+        {id:'21437',name:'Rahul Pruthviraj Deore',desig:'Sr. Engineer',dept:'Concrete Paver'},
+        {id:'21440',name:'Kundan Gunwant More',desig:'Asst. Manager',dept:'General Asset'},
+        {id:'21441',name:'Tushar Ganeshrao Kakulade',desig:'Engineer',dept:'Contract'},
+        {id:'21486',name:'Devidas Valmik Jadhav',desig:'Engineer',dept:'Contract'},
+        {id:'21487',name:'Sagar Dinkar Patil',desig:'MANAGER',dept:'Contract'},
+        {id:'21493',name:'Chander Prakash',desig:'JR ENGINEER',dept:'Milling'},
+        {id:'21494',name:'Anil Mahadev Chavan',desig:'PURCHASE CO-ORDINATOR',dept:'Purchase'},
+        {id:'21562',name:'Sushant Ramrao Patil',desig:'SR ENGINEER',dept:'Concrete Paver'},
+        {id:'21563',name:'Mahesh Maruti Kumbhar',desig:'OFFICER- PURCHASE',dept:'Purchase'},
+        {id:'21566',name:'Ganesh Balasaheb Jadhav',desig:'Residance Engineer',dept:'Contract'},
+        {id:'21567',name:'Vikas Kumar',desig:'Engineer',dept:'General Asset'},
+        {id:'21571',name:'Vijay Kumar Singh',desig:'GENERAL MANAGER',dept:'P&M'},
+        {id:'21577',name:'Dixit Bharat Chitte',desig:'Executive',dept:'Purchase'},
+        {id:'21578',name:'Rahul B',desig:'Purchase Executive',dept:'Milling'},
+        {id:'21605',name:'Akshay Uday Neve',desig:'Sr. Engineer',dept:'Contract'},
+        {id:'21626',name:'Saiprasad Bagalur',desig:'Digital Executive',dept:'Roller'},
+        {id:'21627',name:'Hanamant Bhimanagouda Patil',desig:'Engineer',dept:'General Asset'},
+        {id:'21641',name:'Harshraj Bhagwan Patil',desig:'Engineer',dept:'Contract'},
+        {id:'21674',name:'Sanjay Kumar Palai',desig:'Executive',dept:'Concrete Paver'},
+        {id:'21675',name:'Mayur Manoj Malode',desig:'Sr Engineer',dept:'Concrete Paver'},
+        {id:'21686',name:'Harshal Ganapati Khadatare',desig:'Data Engineer',dept:'IT'},
+        {id:'21687',name:'Bharat Subhash Vitkurkar',desig:'Sr Manager',dept:'Purchase and Planning'},
+        {id:'21702',name:'Shrish Chandra Shukla',desig:'Asst Manager',dept:'Excavator & Wheel loader'},
+        {id:'21703',name:'Anup Kumar Maurya',desig:'Jr. Engineer',dept:'Excavator & Wheel loader'},
+        {id:'21704',name:'Rishikesh Chandrakant Suryawanshi',desig:'Engineer',dept:'Purchase'},
+        {id:'21731',name:'Aniket Sanjay Ghadge',desig:'Jr IT Administration',dept:'IT'},
+        {id:'21733',name:'Kishan Jee',desig:'Asst Manager',dept:'General Asset'},
+        {id:'21734',name:'Prasenjit Roul',desig:'Executive',dept:'P&M'},
+        {id:'21776',name:'Sneha Raju Ugale',desig:'Sr.Engineer',dept:'P&M'},
+        {id:'21777',name:'Vaishnavi Sanjay Jadhav',desig:'Engineer',dept:'Roller'},
+        {id:'21820',name:'Pratik Sudhakarrao Mendhe',desig:'Engineer',dept:'Milling'},
+        {id:'21829',name:'Jignesh Dilip Rathod',desig:'Engineer',dept:'Excavator & Wheel loader'},
+        {id:'21853',name:'Prathamesh Prabhakar Daulatabad',desig:'Account Assistant',dept:'Accounts'},
+        {id:'21855',name:'Rahul Kumar',desig:'Engineer',dept:'Excavator & Wheel loader'}
+      ];
+      const EMP = EMP_RAW.map(e => { const f = e.name.toLowerCase(); return { id: e.id, name: e.name, desig: e.desig, dept: e.dept, full: ' ' + f + ' ', tokens: f.split(/\s+/).filter(Boolean) }; });
+      const EMP_STOP = new Set(['more','info','find','name','who','whom','what','help','the','and','for','details','detail','employee','employees','staff','dept','department','departments','designation','of','id','search','about','tell','me','show','is','a','an','his','her','their','this','that','please','give','do','you','know']);
+      function empNorm(s) { return ' ' + String(s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim() + ' '; }
+      function empMatch(q) {
+        const s = empNorm(q), trimmed = s.trim();
+        // Employee ID lookup (5-digit codes)
+        const idHit = trimmed.match(/\b(\d{4,6})\b/);
+        if (idHit && trimmed.split(' ').length <= 3) { const e = EMP.find(x => x.id === idHit[1]); if (e) return { matches: [e], q: idHit[1] }; }
+        // strip lead/trigger phrases
+        const triggers = ['who is','whos','who s','tell me about','tell me','details of','detail of','details for','details about','give me details of','give details of','info about','information about','information on','look up','lookup','search for','find out','find','search','show me','about','designation of','department of','dept of','employee id of','employee','staff member','staff','member'];
+        let cleaned = s;
+        triggers.forEach(t => cleaned = cleaned.replace(new RegExp('(^| )' + t.replace(/ /g, ' ') + '( |$)', 'g'), ' '));
+        cleaned = cleaned.replace(/\b(details?|designation|department|dept|info|information|please|the|of|a|an|is|id|name|profile|contact)\b/g, ' ').replace(/\s+/g, ' ').trim();
+        if (!cleaned) return null;
+        const qt = cleaned.split(' ').filter(w => w.length >= 2);
+        if (!qt.length) return null;
+        // reserved persona names + ambiguous stop words must not trigger an employee lookup when typed alone
+        if (qt.length === 1) {
+          if (qt[0] === 'harshal' || qt[0] === 'sandeep' || qt[0] === 'hary') return null;
+          if (EMP_STOP.has(qt[0]) || qt[0].length < 3) return null;
+        }
+        let m = EMP.filter(e => e.full.includes(' ' + cleaned + ' ') || (cleaned.length >= 4 && e.full.includes(cleaned)));
+        if (!m.length) m = EMP.filter(e => qt.every(t => e.tokens.includes(t)));
+        if (!m.length && qt.length === 1) {
+          m = EMP.filter(e => e.tokens.includes(qt[0]));
+          if (!m.length && qt[0].length >= 4) m = EMP.filter(e => e.tokens.some(nt => nt.length >= 4 && Math.abs(nt.length - qt[0].length) <= 1 && lev(nt, qt[0]) === 1));
+        }
+        return m.length ? { matches: m, q: cleaned } : null;
+      }
+      function empCard(e) { return `Here are the details I found \uD83D\uDC47\n**${e.name}**\n\u2022 **Employee ID:** ${e.id || '\u2014'}\n\u2022 **Designation:** ${e.desig || '\u2014'}\n\u2022 **Department:** ${e.dept || '\u2014'}`; }
+      function empAnswer(res) {
+        const m = res.matches;
+        if (m.length === 1) return empCard(m[0]);
+        if (m.length <= 8) return `I found **${m.length} employees** matching that name. Which one do you mean?\n` + m.map(e => `\u2022 **${e.name}** \u2014 ${e.desig || 'staff'}, ${e.dept || '\u2014'} (ID ${e.id})`).join('\n') + `\nType the **full name** or **Employee ID** and I'll pull up the full details.`;
+        return `I found **${m.length}** employees with that name. Please type the **full name** or the **Employee ID** so I can pick the right person.`;
+      }
       const KB = [
         {
           id: 'greeting', phrases: ['hi', 'hello', 'hey', 'hii', 'helo', 'good morning', 'good afternoon', 'good evening', 'namaste', 'yo', 'hey there'],
@@ -4113,6 +4217,10 @@
           if (matchAny(q, SYN.stock) || /invent|stock/i.test(q)) return deliver(byId('stock_report'));
           if (matchAny(q, SYN.rental) || /equip|machine/i.test(q)) return deliver(byId('rental_report'));
         }
+
+        // employee directory lookup — first name, last name, full name, or Employee ID
+        const _emp = empMatch(q);
+        if (_emp) { lastIntent = 'employee'; pushBot(empAnswer(_emp)); return; }
 
         // short follow-ups → expand last topic ONLY when the query can't be classified on its own
         const { best, bs, second } = classify(q);
