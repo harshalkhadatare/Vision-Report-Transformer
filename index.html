@@ -3916,27 +3916,27 @@
             `Hello${userName() ? ' ' + userName() : ''}! 😊 Hary here. Ask me about the **P&M**, **PO-GIN** or **Stock** reports, uploading Excel, filters, KPIs — or just tell me what you're trying to get done.`)
         },
         {
-          id: 'identity', phrases: ['who are you', 'what are you', 'your name', 'about you', 'what is hary', 'who is hary', 'introduce yourself'],
+          id: 'identity', phrases: ['name','who are you', 'what are you', 'your name', 'about you', 'what is hary', 'who is hary', 'introduce yourself'],
           tags: [], answer: () => REPLY(`I'm **Hary** — the AI assistant built into the Vision Infra Equipment Solutions Report Analyzer. Think of me as a colleague who knows this application inside-out: reports, dashboards, uploads, filters and calculations. Ask me anything!`)
         },
         {
-          id: 'workplace', phrases: ['where do you work', 'which company', 'who do you work for', 'your company', 'where are you from', 'your office'],
+          id: 'workplace', phrases: ['viesl','company','where do you work', 'which company', 'who do you work for', 'your company', 'where are you from', 'your office'],
           tags: [], answer: () => REPLY(`I work right here as the AI assistant for **Vision Infra Equipment Solutions Limited**. I'm always available to help you with reports, dashboards and data analysis. 🙂`)
         },
         {
-          id: 'developer', phrases: ['who developed you', 'who made you', 'who created you', 'who built you', 'your developer', 'who is harshal', 'who designed you'],
+          id: 'developer', phrases: ['harshal','who developed you', 'who made you', 'who created you', 'who built you', 'your developer', 'who is harshal', 'who designed you'],
           tags: [], answer: () => REPLY(`I was developed by **Mr. Harshal**. He built this whole Report Analyzer platform — I'm the friendly assistant he added to make your work easier.`)
         },
         {
-          id: 'sandeep', phrases: ['who is sandeep', 'who is mr sandeep', 'who is sandeep patil', 'about sandeep', 'tell me about sandeep', 'sandeep patil', 'sandeep'],
+          id: 'sandeep', phrases: ['sandeep','who is sandeep', 'who is mr sandeep', 'who is sandeep patil', 'about sandeep', 'tell me about sandeep', 'sandeep patil', 'sandeep'],
           tags: [], answer: () => REPLY(`He is my manager — **Mr. Sandeep Patil**. He guides and supports **Mr. Harshal** in building the logical reports behind this platform. 🙂 You can reach him at <a href="mailto:pnm_audit@visioninfraindia.com">pnm_audit@visioninfraindia.com</a>.`)
         },
         {
-          id: 'dob', phrases: ['date of birth', 'when were you born', 'your birthday', 'your age', 'how old are you', 'dob'],
+          id: 'dob', phrases: ['dob','date of birth', 'when were you born', 'your birthday', 'your age', 'how old are you', 'dob'],
           tags: [], answer: () => REPLY(`You can say I was born on **15 June 2026** 🎂 — still young, but I already know this application by heart!`)
         },
         {
-          id: 'father', phrases: ['who is your father', 'your father', 'your mother', 'your parents', 'your family', 'your creator language'],
+          id: 'father', phrases: ['father','your father','who is your father', 'your father', 'your mother', 'your parents', 'your family', 'your creator language'],
           tags: [], answer: () => REPLY(`😄 I'd say my father is the **Python programming language**, because that's where much of my intelligence comes from! And my home is right here in this browser.`)
         },
         {
@@ -3948,7 +3948,7 @@
           tags: [], answer: () => REPLY(`I'm an AI assistant 🤖 — no sleep, no chai breaks, available 24/7. But I try to be as friendly and helpful as your best colleague.`)
         },
         {
-          id: 'joke', phrases: ['tell me a joke', 'make me laugh', 'say something funny', 'a joke', 'funny'],
+          id: 'joke', phrases: ['joke','tell me a joke', 'make me laugh', 'say something funny', 'a joke', 'funny'],
           tags: [], answer: () => REPLY(
             `Why did the spreadsheet go to therapy? It had too many **unresolved cells**! 😄 Now… shall we resolve some of your data instead?`,
             `I asked a stock item how it felt. It said *"a bit depreciated."* 📉 Okay, back to work — what can I help with?`,
@@ -4067,7 +4067,7 @@
           tags: [], answer: () => REPLY(`You're welcome! 😊 Happy to help anytime. Anything else about the reports or dashboards?`, `Glad that helped! 🙌 I'm right here if you need anything else.`)
         },
         {
-          id: 'bye', phrases: ['bye', 'goodbye', 'see you', 'exit', 'close', 'that is all', 'no thanks', 'good night'],
+          id: 'bye', phrases: ['by','bye', 'goodbye', 'see you', 'exit', 'close', 'that is all', 'no thanks', 'good night'],
           tags: [], answer: () => REPLY(`Goodbye${userName() ? ', ' + userName() : ''}! 👋 Come back whenever you need a hand with your reports. Have a great day!`)
         }
       ];
