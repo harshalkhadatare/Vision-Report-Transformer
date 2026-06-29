@@ -3124,8 +3124,8 @@
       const columns = [
         { key: 'itemCode', label: 'Item Code', type: 'text' }, { key: 'desc', label: 'Item Description', type: 'text' },
         { key: 'site', label: 'Site', type: 'text' }, { key: 'division', label: 'Division', type: 'text' },
-        { key: 'department', label: 'Department', type: 'text' }, { key: 'category', label: 'Category', type: 'text' },
-        { key: 'acClass', label: 'Item AC Class', type: 'text' }, { key: 'subClass', label: 'Material Group', type: 'text' },
+        { key: 'department', label: 'Department', type: 'text' }, { key: 'category', label: 'Item Category', type: 'text' },
+        { key: 'acClass', label: 'Item AC Class', type: 'text' }, { key: 'subClass', label: 'Item Sub Category', type: 'text' },
         { key: 'uom', label: 'UOM', type: 'text' }, { key: 'closeQty', label: 'Closing Qty', type: 'num2' },
         { key: 'closeVal', label: 'Closing Value', type: 'num2' }, { key: 'receiptVal', label: 'Receipt Value', type: 'num2' },
         { key: 'issueVal', label: 'Issue Value', type: 'num2' }, { key: 'itemYear', label: 'Opening Value', type: 'num2' }
@@ -3133,8 +3133,8 @@
       const tableColumns = columns.map(c => ({ key: c.key, label: c.label, fmt: c.type === 'num2' ? 'num2' : 'text' }));
       const filters = [
         { key: 'site', label: 'Site', multi: true }, { key: 'division', label: 'Division', multi: true },
-        { key: 'department', label: 'Department', multi: true }, { key: 'category', label: 'Category', multi: true },
-        { key: 'acClass', label: 'Item AC Class', multi: true }, { key: 'subClass', label: 'Material Group', multi: true },
+        { key: 'department', label: 'Department', multi: true }, { key: 'category', label: 'Item Category', multi: true },
+        { key: 'acClass', label: 'Item AC Class', multi: true }, { key: 'subClass', label: 'Item Sub Category', multi: true },
         { key: 'uom', label: 'UOM', multi: true }, { key: 'closeVal', label: 'Closing Value \u20b9 (min\u2013max)', type: 'range' }
       ];
 
@@ -3177,6 +3177,53 @@
         [40, 22, 22, 22, 22].forEach((w, i) => ws2.getColumn(i + 1).width = w);
         const last = writeTable(ws2, 3, Object.entries(pivot(data, 'category')).sort(alpha));
         writeTable(ws2, last + 4, Object.entries(pivot(data, 'acClass')).sort(alpha));
+
+        // Summery03 — detailed stock data (exactly the filtered dashboard rows), Rental-style layout
+        const S3COLS = [
+          { label: 'Item Code', key: 'itemCode', t: 'text' },
+          { label: 'Item Description', key: 'desc', t: 'text' },
+          { label: 'Site', key: 'site', t: 'text' },
+          { label: 'Division', key: 'division', t: 'text' },
+          { label: 'Department', key: 'department', t: 'text' },
+          { label: 'Category', key: 'category', t: 'text' },
+          { label: 'Item AC Class', key: 'acClass', t: 'text' },
+          { label: 'Material Group', key: 'subClass', t: 'text' },
+          { label: 'UOM', key: 'uom', t: 'text' },
+          { label: 'Closing Qty', key: 'closeQty', t: 'num2' },
+          { label: 'Closing Value', key: 'closeVal', t: 'num2' },
+          { label: 'Receipt Value', key: 'receiptVal', t: 'num2' },
+          { label: 'Issue Value', key: 'issueVal', t: 'num2' },
+          { label: 'Opening Value', key: 'itemYear', t: 'num2' }
+        ];
+        const ws3 = wb.addWorksheet('Summery03', { views: [{ state: 'frozen', ySplit: 1 }] });
+        ws3.addRow(S3COLS.map(c => c.label));
+        data.forEach(r => ws3.addRow(S3COLS.map(c => (c.t === 'num2' ? (+r[c.key] || 0) : (r[c.key] == null ? '' : r[c.key])))));
+        const h3 = ws3.getRow(1); h3.height = 24;
+        h3.eachCell(cell => {
+          cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11, name: 'Calibri' };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEAD } };
+          cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }; cell.border = box(thin);
+        });
+        for (let R = 2; R <= data.length + 1; R++) {
+          const row = ws3.getRow(R);
+          S3COLS.forEach((c, ci) => {
+            const cell = row.getCell(ci + 1); cell.border = box(thin); cell.font = { size: 10.5, name: 'Calibri' };
+            if (c.t === 'num2') { cell.numFmt = NUM; cell.alignment = { horizontal: 'right' }; }
+            else cell.alignment = { horizontal: 'left', vertical: 'middle' };
+            if (R % 2 === 0) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF6F9FC' } };
+          });
+        }
+        S3COLS.forEach((c, ci) => {
+          let max = String(c.label).length;
+          for (let R = 2; R <= data.length + 1; R++) {
+            const v = ws3.getRow(R).getCell(ci + 1).value;
+            const len = typeof v === 'number' ? String(v).length + (c.t === 'num2' ? 3 : 0) : String(v == null ? '' : v).length;
+            if (len > max) max = len;
+          }
+          ws3.getColumn(ci + 1).width = Math.min(Math.max(max + 2, 8), 46);
+        });
+        ws3.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: S3COLS.length } };
+
         const buf = await wb.xlsx.writeBuffer();
         const a = document.createElement('a');
         a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
@@ -3188,7 +3235,7 @@
           name: 'Stock Report - Beta Version', tagline: 'Inventory stock \u2014 closing value by site & category',
           icon: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>'
         },
-        hint: 'Upload the ERP <b>stock dump</b> (workbook with a <b>Master sheet</b>: Item Code, Closing Value, Location Name, Item Class\u2026). Search by Item Code, filter by site / division / category \u2014 KPIs &amp; charts update live in <b>\u20b9 Cr</b>. The Excel export gives <b>Summery01</b> (by site) and <b>Summery02</b> (by category &amp; AC class).',
+        hint: 'Upload the ERP <b>stock dump</b> (workbook with a <b>Master sheet</b>: Item Code, Closing Value, Location Name, Item Class\u2026). Search by Item Code, filter by site / division / category \u2014 KPIs &amp; charts update live in <b>\u20b9 Cr</b>. The Excel export gives <b>Summery01</b> (by site), <b>Summery02</b> (by category &amp; AC class) and <b>Summery03</b> (detailed dashboard data).',
         sheetName: 'Stock', exportName: 'VisionInfra-Stock-Summary',
         process, kpis, charts, columns, tableColumns, filters, searchKeys: ['itemCode', 'desc', 'site', 'division', 'department', 'category'], exportExcel
       };
