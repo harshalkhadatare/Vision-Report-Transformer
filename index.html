@@ -2980,7 +2980,7 @@
           {
             title: 'Top 12 assets by worked hours', sub: 'highest-running machines', height: 340, render(cv) {
               const t = [...view].sort((a, b) => b.worked - a.worked).slice(0, 12);
-              return new Chart(cv, { type: 'bar', data: { labels: t.map(r => r.asset), datasets: [{ data: t.map(r => Math.round(r.worked)), backgroundColor: '#163a5c', borderRadius: 5 }] }, options: opts({ indexAxis: 'y', scales: { x: { ticks: { callback: v => fmtN(v) } }, y: { ticks: { font: { size: 10.5 } } } } }) });
+              return new Chart(cv, { type: 'bar', data: { labels: t.map(r => r.asset), datasets: [{ data: t.map(r => Math.round(r.worked)), backgroundColor: '#163a5c', borderRadius: 5 }] }, options: opts({ indexAxis: 'y', plugins: { legend: { display: false }, tooltip: { callbacks: { title: it => { const r = t[it[0].dataIndex]; const d = [r.make, r.model].filter(Boolean).join(' '); return r.asset + (d ? ' — ' + d : ''); } } } }, scales: { x: { ticks: { callback: v => fmtN(v) } }, y: { ticks: { font: { size: 10.5 } } } } }) });
             }
           },
         ];
@@ -3114,9 +3114,9 @@
           },
           {
             title: 'Top 10 Consumed Items', sub: 'by issue value \u00b7 \u20b9 Cr', height: 360, render(cv) {
-              const o = {}; view.forEach(r => { const k = r.itemCode || '—'; o[k] = (o[k] || 0) + Math.abs(+r.issueVal || 0); });
-              const e = Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, 10);
-              return new Chart(cv, { type: 'bar', data: { labels: e.map(x => x[0]), datasets: [{ data: e.map(x => crN(x[1])), backgroundColor: '#d8504c', borderRadius: 5 }] }, options: opts({ indexAxis: 'y', plugins: { legend: { display: false }, tooltip: { callbacks: { label: tipX } } }, scales: { x: crAxis, y: { ticks: { font: { size: 9 } } } } }) });
+              const o = {}; view.forEach(r => { const k = r.itemCode || '—'; if (!o[k]) o[k] = { v: 0, d: r.desc }; o[k].v += Math.abs(+r.issueVal || 0); });
+              const e = Object.entries(o).sort((a, b) => b[1].v - a[1].v).slice(0, 10);
+              return new Chart(cv, { type: 'bar', data: { labels: e.map(x => x[0]), datasets: [{ data: e.map(x => crN(x[1].v)), backgroundColor: '#d8504c', borderRadius: 5 }] }, options: opts({ indexAxis: 'y', plugins: { legend: { display: false }, tooltip: { callbacks: { title: it => { const i = it[0].dataIndex; return e[i][0] + ' — ' + (e[i][1].d || ''); }, label: tipX } } }, scales: { x: crAxis, y: { ticks: { font: { size: 9 } } } } }) });
             }
           }
         ];
