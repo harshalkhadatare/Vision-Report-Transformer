@@ -3146,7 +3146,7 @@
     function swapAuth(toReg) {
       document.getElementById('loginForm').style.display = toReg ? 'none' : 'block';
       document.getElementById('registerForm').style.display = toReg ? 'block' : 'none';
-      document.getElementById('authTitle').textContent = toReg ? 'Create Account' : 'Manager Login';
+      document.getElementById('authTitle').textContent = toReg ? 'Create Account' : 'Login';
       document.getElementById('authSub').textContent = toReg ? 'Register a new account' : 'Sign in to access the Report Analyzer'; authMsg('');
     }
     function pwScore(p) { let s = 0; if (!p) return 0; if (p.length >= 4) s++; if (p.length >= 8) s++; if (/[A-Z]/.test(p)) s++; if (/[0-9]/.test(p)) s++; if (/[^A-Za-z0-9]/.test(p)) s++; return s; }
