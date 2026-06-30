@@ -5084,6 +5084,184 @@
       sync();
     })();
   </script>
+  <style>
+    /* ============================================================
+       PREMIUM REPORT CARDS  (UI-only redesign — no logic changes)
+       3 / 2 / 1 per row · unique gradient per card · glass icons ·
+       hover lift + glow · click animation
+       ============================================================ */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 22px;
+      max-width: 1120px;
+      margin: 0 auto;
+    }
+
+    .rcard {
+      position: relative;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      padding: 26px 24px;
+      border-radius: 20px;
+      cursor: pointer;
+      color: #fff;
+      border: 1px solid rgba(255, 255, 255, .18);
+      background: linear-gradient(145deg, #4f8ff7, #15307a);
+      box-shadow: 0 12px 28px rgba(20, 30, 60, .20);
+      overflow: hidden;
+      transition: transform .28s cubic-bezier(.2, .8, .2, 1), box-shadow .28s ease;
+    }
+
+    /* glossy top sheen + soft corner glow (kept below the content) */
+    .rcard::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      background: linear-gradient(180deg, rgba(255, 255, 255, .20), rgba(255, 255, 255, 0) 45%);
+      pointer-events: none;
+    }
+
+    .rcard::after {
+      content: "";
+      position: absolute;
+      top: -45%;
+      right: -22%;
+      width: 72%;
+      height: 85%;
+      z-index: 0;
+      background: radial-gradient(circle, rgba(255, 255, 255, .26), transparent 62%);
+      pointer-events: none;
+    }
+
+    .rcard>* {
+      position: relative;
+      z-index: 1;
+    }
+
+    .rcard:hover {
+      transform: translateY(-8px);
+      box-shadow: 0 26px 54px rgba(20, 30, 60, .30);
+    }
+
+    .rcard:active {
+      transform: translateY(-3px) scale(.985);
+      transition: transform .09s ease;
+    }
+
+    .rcard .ic {
+      width: 54px;
+      height: 54px;
+      border-radius: 15px;
+      margin-bottom: 18px;
+      display: grid;
+      place-items: center;
+      background: rgba(255, 255, 255, .20);
+      border: 1px solid rgba(255, 255, 255, .30);
+      -webkit-backdrop-filter: blur(6px);
+      backdrop-filter: blur(6px);
+      box-shadow: 0 6px 16px rgba(0, 0, 0, .12), inset 0 1px 0 rgba(255, 255, 255, .45);
+      transition: transform .28s ease;
+    }
+
+    .rcard:hover .ic {
+      transform: translateY(-2px) scale(1.07) rotate(-3deg);
+    }
+
+    .rcard .ic svg {
+      width: 27px;
+      height: 27px;
+      stroke: #fff;
+      fill: none;
+    }
+
+    .rcard h3 {
+      font-size: 18px;
+      font-weight: 750;
+      color: #fff;
+      letter-spacing: -.01em;
+    }
+
+    .rcard p {
+      font-size: 13px;
+      line-height: 1.55;
+      color: rgba(255, 255, 255, .9);
+      margin-top: 8px;
+    }
+
+    /* unique premium gradient per card (cycles for future modules) */
+    .rcard:nth-child(8n+1) { background: linear-gradient(145deg, #4f8ff7, #15307a) }
+
+    /* Royal → Deep Blue */
+    .rcard:nth-child(8n+2) { background: linear-gradient(145deg, #fb923c, #dc2626) }
+
+    /* Orange → Red */
+    .rcard:nth-child(8n+3) { background: linear-gradient(145deg, #16c0a8, #0a8f5f) }
+
+    /* Teal → Green */
+    .rcard:nth-child(8n+4) { background: linear-gradient(145deg, #8b5cf6, #4338ca) }
+
+    /* Purple → Indigo */
+    .rcard:nth-child(8n+5) { background: linear-gradient(145deg, #f472b6, #be123c) }
+
+    /* Pink → Rose */
+    .rcard:nth-child(8n+6) { background: linear-gradient(145deg, #22d3ee, #0e7490) }
+
+    /* Cyan → Blue */
+    .rcard:nth-child(8n+7) { background: linear-gradient(145deg, #fbbf24, #d97706) }
+
+    /* Amber → Orange */
+    .rcard:nth-child(8n+8) { background: linear-gradient(145deg, #64748b, #1e293b) }
+
+    /* Slate → Charcoal */
+
+    /* hover glow tinted to each card */
+    .rcard:nth-child(8n+1):hover { box-shadow: 0 26px 54px rgba(37, 99, 235, .45) }
+
+    .rcard:nth-child(8n+2):hover { box-shadow: 0 26px 54px rgba(220, 38, 38, .42) }
+
+    .rcard:nth-child(8n+3):hover { box-shadow: 0 26px 54px rgba(13, 148, 136, .42) }
+
+    .rcard:nth-child(8n+4):hover { box-shadow: 0 26px 54px rgba(99, 72, 202, .45) }
+
+    .rcard:nth-child(8n+5):hover { box-shadow: 0 26px 54px rgba(190, 18, 60, .42) }
+
+    .rcard:nth-child(8n+6):hover { box-shadow: 0 26px 54px rgba(14, 116, 144, .42) }
+
+    .rcard:nth-child(8n+7):hover { box-shadow: 0 26px 54px rgba(217, 119, 6, .42) }
+
+    .rcard:nth-child(8n+8):hover { box-shadow: 0 26px 54px rgba(30, 41, 59, .42) }
+
+    .rcard.soon { opacity: .72 }
+
+    .rcard .tag {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      background: rgba(255, 255, 255, .22);
+      color: #fff;
+      border: 1px solid rgba(255, 255, 255, .35);
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      -webkit-backdrop-filter: blur(4px);
+      backdrop-filter: blur(4px);
+    }
+
+    /* responsive: 2 per row on tablet, 1 per row on mobile */
+    @media (max-width: 980px) {
+      .cards { grid-template-columns: repeat(2, 1fr); max-width: 720px }
+    }
+
+    @media (max-width: 600px) {
+      .cards { grid-template-columns: 1fr; max-width: 440px }
+    }
+  </style>
 </body>
 
 </html>
