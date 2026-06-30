@@ -5,6 +5,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>VIESL · Report Analyzer</title>
+  <meta name="description" content="Vision Infra Equipment Solutions Limited — Report Analyzer" />
+  <link rel="icon" type="image/png" href="images/logo2.png">
   <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
   <script>if (typeof XLSX === 'undefined') { document.write('<scr' + 'ipt src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"><\/scr' + 'ipt>'); }</script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
@@ -199,16 +201,61 @@
     }
 
     .logo {
-      width: 38px;
-      height: 38px;
-      border-radius: 10px;
+      height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 5px 10px;
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, .22), inset 0 1px 0 rgba(255, 255, 255, .7);
+      flex: none;
+    }
+
+    .logo img {
+      height: 100%;
+      width: auto;
+      max-width: 150px;
+      object-fit: contain;
+      display: block;
+    }
+
+    .logo.logo-fallback {
+      width: 44px;
+      padding: 0;
       background: linear-gradient(135deg, #3d8ad0, #f59e0b);
-      display: grid;
-      place-items: center;
+    }
+
+    .logo.logo-fallback::after {
+      content: "VI";
       font-weight: 800;
-      font-size: 15px;
+      font-size: 16px;
+      letter-spacing: .5px;
       color: #fff;
-      box-shadow: 0 6px 14px rgba(0, 0, 0, .3), inset 0 1px 0 rgba(255, 255, 255, .4)
+    }
+
+    @media (max-width: 560px) {
+      .brand b {
+        font-size: 13px
+      }
+
+      .brand span {
+        font-size: 9px
+      }
+
+      .logo {
+        height: 36px;
+        padding: 4px 8px;
+        border-radius: 10px;
+      }
+
+      .logo img {
+        max-width: 116px;
+      }
+
+      .logo.logo-fallback {
+        width: 36px;
+      }
     }
 
     .brand b {
@@ -1894,7 +1941,7 @@
   <section id="authView">
     <div class="auth-card">
       <div class="auth-brand"><b>VIESL</b></div>
-      <h2 id="authTitle">Manager Login</h2>
+      <h2 id="authTitle">Login</h2>
       <p class="sub" id="authSub">Sign in to access the Report Analyzer</p>
       <div class="auth-msg" id="authMsg"></div>
       <div id="loginForm">
@@ -1931,13 +1978,23 @@
     <header class="topbar">
       <div class="wrap">
         <div class="brand">
-          <div><b>Vision Infra Equipment Solutions Ltd.</b><span id="brandSub">P&M Report Analyzer</span></div>
+          <div class="logo" aria-label="VIESL Logo" title="Vision Infra Equipment Solutions Limited">
+            <img src="images/logo.png" alt="VIESL Logo"
+              onerror="this.style.display='none';this.parentNode.classList.add('logo-fallback');">
+          </div>
+          <div class="brand-text">
+            <b>Vision Infra Equipment Solutions Ltd.</b>
+            <span id="brandSub">P&M Report Analyzer</span>
+          </div>
         </div>
         <div class="actions">
 
-          <button class="btn btn-ghost" id="btnReset" title="Upload new file" disabled><span class="lbl">New</span> ↺</button>
-          <button class="btn btn-ghost" id="btnCsv" title="Export as CSV" disabled>⬇ <span class="lbl">CSV</span></button>
-          <button class="btn btn-ghost" id="btnPdf" title="Export as PDF" disabled>⬇ <span class="lbl">PDF</span></button>
+          <button class="btn btn-ghost" id="btnReset" title="Upload new file" disabled><span class="lbl">New</span>
+            ↺</button>
+          <button class="btn btn-ghost" id="btnCsv" title="Export as CSV" disabled>⬇ <span
+              class="lbl">CSV</span></button>
+          <button class="btn btn-ghost" id="btnPdf" title="Export as PDF" disabled>⬇ <span
+              class="lbl">PDF</span></button>
           <button class="btn btn-green" id="btnXlsx" title="Export as Excel" disabled>⬇ Excel report</button>
           <button class="btn btn-ghost" id="btnAdmin" style="display:none" title="Admin dashboard">Admin</button>
           <button class="btn btn-ghost" id="btnProfile" title="My profile">My profile</button>
@@ -2143,9 +2200,11 @@
   <!-- ════════════════ HARY · AI ASSISTANT (self-contained) ════════════════ -->
   <button id="haryFab" type="button" aria-label="Open Hary, the AI assistant" title="Ask Hary">
     <span class="hary-fab-ic">
-      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 2a7 7 0 0 1 7 7v1a7 7 0 0 1-7 7H9l-4 3v-3.5A7 7 0 0 1 5 10V9a7 7 0 0 1 7-7Z"/>
-        <circle cx="9.5" cy="10" r="1.1" fill="#fff" stroke="none"/><circle cx="14.5" cy="10" r="1.1" fill="#fff" stroke="none"/>
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"
+        stroke-linejoin="round">
+        <path d="M12 2a7 7 0 0 1 7 7v1a7 7 0 0 1-7 7H9l-4 3v-3.5A7 7 0 0 1 5 10V9a7 7 0 0 1 7-7Z" />
+        <circle cx="9.5" cy="10" r="1.1" fill="#fff" stroke="none" />
+        <circle cx="14.5" cy="10" r="1.1" fill="#fff" stroke="none" />
       </svg>
     </span>
     <span class="hary-fab-txt">Ask&nbsp;Hary</span>
@@ -2164,7 +2223,10 @@
     <div class="hary-input">
       <input id="haryInput" type="text" autocomplete="off" placeholder="Ask me anything about the app…">
       <button id="harySend" title="Send" aria-label="Send">
-        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"
+          stroke-linejoin="round">
+          <path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z" />
+        </svg>
       </button>
     </div>
     <div class="hary-foot">Hary is an on-device assistant · answers stay in your browser</div>
@@ -2172,73 +2234,415 @@
 
   <style>
     /* ── Hary accent adapts to whatever theme tokens exist ── */
-    #haryFab, #haryPanel { --hg1: var(--steel, #4f46e5); --hg2: var(--navy2, #1d2552); --hgrad: linear-gradient(135deg, var(--hg1), var(--hg2)); font-family: var(--font, 'Inter', system-ui, sans-serif); }
-    #haryFab {
-      position: fixed; right: 22px; bottom: 22px; z-index: 200; display: inline-flex; align-items: center; gap: 10px;
-      padding: 12px 18px 12px 13px; border: none; border-radius: 40px; cursor: pointer; color: #fff;
-      background: var(--hgrad); box-shadow: 0 12px 30px rgba(30, 40, 90, .35); transition: transform .18s, box-shadow .22s, opacity .2s;
+    #haryFab,
+    #haryPanel {
+      --hg1: var(--steel, #4f46e5);
+      --hg2: var(--navy2, #1d2552);
+      --hgrad: linear-gradient(135deg, var(--hg1), var(--hg2));
+      font-family: var(--font, 'Inter', system-ui, sans-serif);
     }
-    #haryFab:hover { transform: translateY(-2px); box-shadow: 0 18px 40px rgba(30, 40, 90, .45); }
-    #haryFab:active { transform: translateY(0); }
-    .hary-fab-ic { width: 30px; height: 30px; display: grid; place-items: center; background: rgba(255, 255, 255, .18); border-radius: 50%; }
-    .hary-fab-ic svg { width: 19px; height: 19px; }
-    .hary-fab-txt { font-weight: 700; font-size: 14px; letter-spacing: -.01em; }
-    .hary-fab-dot { position: absolute; top: 9px; right: 12px; width: 9px; height: 9px; border-radius: 50%; background: #2bd47d; box-shadow: 0 0 0 3px rgba(43, 212, 125, .3); animation: haryPulse 2s infinite; }
-    @keyframes haryPulse { 0%, 100% { box-shadow: 0 0 0 3px rgba(43, 212, 125, .3); } 50% { box-shadow: 0 0 0 6px rgba(43, 212, 125, 0); } }
-    body.hary-open #haryFab { opacity: 0; pointer-events: none; }
+
+    #haryFab {
+      position: fixed;
+      right: 22px;
+      bottom: 22px;
+      z-index: 200;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 18px 12px 13px;
+      border: none;
+      border-radius: 40px;
+      cursor: pointer;
+      color: #fff;
+      background: var(--hgrad);
+      box-shadow: 0 12px 30px rgba(30, 40, 90, .35);
+      transition: transform .18s, box-shadow .22s, opacity .2s;
+    }
+
+    #haryFab:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 18px 40px rgba(30, 40, 90, .45);
+    }
+
+    #haryFab:active {
+      transform: translateY(0);
+    }
+
+    .hary-fab-ic {
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      background: rgba(255, 255, 255, .18);
+      border-radius: 50%;
+    }
+
+    .hary-fab-ic svg {
+      width: 19px;
+      height: 19px;
+    }
+
+    .hary-fab-txt {
+      font-weight: 700;
+      font-size: 14px;
+      letter-spacing: -.01em;
+    }
+
+    .hary-fab-dot {
+      position: absolute;
+      top: 9px;
+      right: 12px;
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #2bd47d;
+      box-shadow: 0 0 0 3px rgba(43, 212, 125, .3);
+      animation: haryPulse 2s infinite;
+    }
+
+    @keyframes haryPulse {
+
+      0%,
+      100% {
+        box-shadow: 0 0 0 3px rgba(43, 212, 125, .3);
+      }
+
+      50% {
+        box-shadow: 0 0 0 6px rgba(43, 212, 125, 0);
+      }
+    }
+
+    body.hary-open #haryFab {
+      opacity: 0;
+      pointer-events: none;
+    }
 
     .hary-panel {
-      position: fixed; right: 22px; bottom: 22px; z-index: 201; width: 388px; max-width: calc(100vw - 28px);
-      height: 600px; max-height: calc(100vh - 40px); background: var(--surface, #fff); border: 1px solid var(--line, #e9edf5);
-      border-radius: 22px; box-shadow: 0 30px 80px rgba(20, 26, 58, .32); display: flex; flex-direction: column; overflow: hidden;
-      opacity: 0; transform: translateY(18px) scale(.98); pointer-events: none; transition: opacity .22s ease, transform .24s cubic-bezier(.2, .8, .2, 1);
+      position: fixed;
+      right: 22px;
+      bottom: 22px;
+      z-index: 201;
+      width: 388px;
+      max-width: calc(100vw - 28px);
+      height: 600px;
+      max-height: calc(100vh - 40px);
+      background: var(--surface, #fff);
+      border: 1px solid var(--line, #e9edf5);
+      border-radius: 22px;
+      box-shadow: 0 30px 80px rgba(20, 26, 58, .32);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      opacity: 0;
+      transform: translateY(18px) scale(.98);
+      pointer-events: none;
+      transition: opacity .22s ease, transform .24s cubic-bezier(.2, .8, .2, 1);
     }
-    body.hary-open .hary-panel { opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; }
 
-    .hary-head { display: flex; align-items: center; gap: 11px; padding: 14px 14px 14px 16px; background: var(--hgrad); color: #fff; }
-    .hary-ava { position: relative; width: 40px; height: 40px; border-radius: 50%; background: rgba(255, 255, 255, .2); display: grid; place-items: center; font-weight: 800; font-size: 17px; }
-    .hary-on { position: absolute; right: -1px; bottom: -1px; width: 11px; height: 11px; border-radius: 50%; background: #2bd47d; border: 2px solid #fff; }
-    .hary-id { flex: 1; line-height: 1.2; }
-    .hary-id b { font-size: 15.5px; font-weight: 750; letter-spacing: -.01em; }
-    .hary-id span { display: block; font-size: 11.5px; opacity: .85; }
-    .hary-hbtn { background: rgba(255, 255, 255, .16); border: none; color: #fff; width: 30px; height: 30px; border-radius: 9px; cursor: pointer; font-size: 14px; transition: background .15s; }
-    .hary-hbtn:hover { background: rgba(255, 255, 255, .32); }
+    body.hary-open .hary-panel {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      pointer-events: auto;
+    }
 
-    .hary-body { flex: 1; overflow-y: auto; padding: 16px 14px 6px; background: linear-gradient(180deg, rgba(79, 70, 229, .04), transparent 120px); scroll-behavior: smooth; }
-    .hary-row { display: flex; margin-bottom: 12px; gap: 8px; align-items: flex-end; }
-    .hary-row.me { flex-direction: row-reverse; }
-    .hary-mava { width: 26px; height: 26px; border-radius: 50%; flex: none; background: var(--hgrad); color: #fff; display: grid; place-items: center; font-size: 11px; font-weight: 800; }
-    .hary-row.me .hary-mava { background: #e7e9f5; color: var(--muted, #5b667c); }
-    .hary-bub { max-width: 76%; padding: 10px 13px; border-radius: 15px; font-size: 13.5px; line-height: 1.5; color: var(--ink, #16202e); background: #f1f4f9; border-top-left-radius: 5px; word-wrap: break-word; }
-    .hary-row.me .hary-bub { background: var(--hgrad); color: #fff; border-top-left-radius: 15px; border-top-right-radius: 5px; }
-    .hary-bub b { font-weight: 700; }
-    .hary-bub a { color: inherit; font-weight: 700; }
-    .hary-bub ul { margin: 6px 0 2px; padding-left: 16px; }
-    .hary-bub li { margin: 2px 0; }
-    .hary-bub .hary-step { display: block; margin: 3px 0; }
-    .hary-time { font-size: 10px; color: var(--hint, #95a1b4); margin: 2px 6px 0; }
+    .hary-head {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      padding: 14px 14px 14px 16px;
+      background: var(--hgrad);
+      color: #fff;
+    }
 
-    .hary-typing { display: inline-flex; gap: 4px; padding: 12px 14px; background: #f1f4f9; border-radius: 15px; border-top-left-radius: 5px; }
-    .hary-typing i { width: 7px; height: 7px; border-radius: 50%; background: #b6c0d2; animation: haryBlink 1.3s infinite both; }
-    .hary-typing i:nth-child(2) { animation-delay: .2s; } .hary-typing i:nth-child(3) { animation-delay: .4s; }
-    @keyframes haryBlink { 0%, 80%, 100% { opacity: .3; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+    .hary-ava {
+      position: relative;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, .2);
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      font-size: 17px;
+    }
 
-    .hary-sugg { display: flex; flex-wrap: wrap; gap: 7px; padding: 4px 14px 10px; }
-    .hary-chip { border: 1px solid var(--line, #e1e6f0); background: var(--surface, #fff); color: var(--steel, #4f46e5); font-weight: 600; font-size: 12px; padding: 7px 12px; border-radius: 30px; cursor: pointer; transition: background .15s, border-color .15s, transform .12s; font-family: inherit; }
-    .hary-chip:hover { background: var(--sky, #eef1fe); border-color: #cdd5fb; transform: translateY(-1px); }
+    .hary-on {
+      position: absolute;
+      right: -1px;
+      bottom: -1px;
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: #2bd47d;
+      border: 2px solid #fff;
+    }
 
-    .hary-input { display: flex; align-items: center; gap: 8px; padding: 11px 12px; border-top: 1px solid var(--line, #e9edf5); background: var(--surface, #fff); }
-    .hary-input input { flex: 1; border: 1.5px solid var(--line, #e3e8ee); border-radius: 22px; padding: 11px 15px; font-size: 13.5px; font-family: inherit; color: var(--ink, #16202e); background: #fbfcff; }
-    .hary-input input:focus { outline: none; border-color: var(--hg1); box-shadow: 0 0 0 3px rgba(79, 70, 229, .14); background: #fff; }
-    #harySend { width: 42px; height: 42px; flex: none; border: none; border-radius: 50%; background: var(--hgrad); cursor: pointer; display: grid; place-items: center; transition: transform .15s, box-shadow .2s; box-shadow: 0 6px 14px rgba(40, 50, 110, .28); }
-    #harySend:hover { transform: scale(1.06); } #harySend svg { width: 18px; height: 18px; }
-    .hary-foot { text-align: center; font-size: 10px; color: var(--hint, #9aa6b8); padding: 0 0 8px; background: var(--surface, #fff); }
+    .hary-id {
+      flex: 1;
+      line-height: 1.2;
+    }
+
+    .hary-id b {
+      font-size: 15.5px;
+      font-weight: 750;
+      letter-spacing: -.01em;
+    }
+
+    .hary-id span {
+      display: block;
+      font-size: 11.5px;
+      opacity: .85;
+    }
+
+    .hary-hbtn {
+      background: rgba(255, 255, 255, .16);
+      border: none;
+      color: #fff;
+      width: 30px;
+      height: 30px;
+      border-radius: 9px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background .15s;
+    }
+
+    .hary-hbtn:hover {
+      background: rgba(255, 255, 255, .32);
+    }
+
+    .hary-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 14px 6px;
+      background: linear-gradient(180deg, rgba(79, 70, 229, .04), transparent 120px);
+      scroll-behavior: smooth;
+    }
+
+    .hary-row {
+      display: flex;
+      margin-bottom: 12px;
+      gap: 8px;
+      align-items: flex-end;
+    }
+
+    .hary-row.me {
+      flex-direction: row-reverse;
+    }
+
+    .hary-mava {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      flex: none;
+      background: var(--hgrad);
+      color: #fff;
+      display: grid;
+      place-items: center;
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .hary-row.me .hary-mava {
+      background: #e7e9f5;
+      color: var(--muted, #5b667c);
+    }
+
+    .hary-bub {
+      max-width: 76%;
+      padding: 10px 13px;
+      border-radius: 15px;
+      font-size: 13.5px;
+      line-height: 1.5;
+      color: var(--ink, #16202e);
+      background: #f1f4f9;
+      border-top-left-radius: 5px;
+      word-wrap: break-word;
+    }
+
+    .hary-row.me .hary-bub {
+      background: var(--hgrad);
+      color: #fff;
+      border-top-left-radius: 15px;
+      border-top-right-radius: 5px;
+    }
+
+    .hary-bub b {
+      font-weight: 700;
+    }
+
+    .hary-bub a {
+      color: inherit;
+      font-weight: 700;
+    }
+
+    .hary-bub ul {
+      margin: 6px 0 2px;
+      padding-left: 16px;
+    }
+
+    .hary-bub li {
+      margin: 2px 0;
+    }
+
+    .hary-bub .hary-step {
+      display: block;
+      margin: 3px 0;
+    }
+
+    .hary-time {
+      font-size: 10px;
+      color: var(--hint, #95a1b4);
+      margin: 2px 6px 0;
+    }
+
+    .hary-typing {
+      display: inline-flex;
+      gap: 4px;
+      padding: 12px 14px;
+      background: #f1f4f9;
+      border-radius: 15px;
+      border-top-left-radius: 5px;
+    }
+
+    .hary-typing i {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #b6c0d2;
+      animation: haryBlink 1.3s infinite both;
+    }
+
+    .hary-typing i:nth-child(2) {
+      animation-delay: .2s;
+    }
+
+    .hary-typing i:nth-child(3) {
+      animation-delay: .4s;
+    }
+
+    @keyframes haryBlink {
+
+      0%,
+      80%,
+      100% {
+        opacity: .3;
+        transform: translateY(0);
+      }
+
+      40% {
+        opacity: 1;
+        transform: translateY(-3px);
+      }
+    }
+
+    .hary-sugg {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      padding: 4px 14px 10px;
+    }
+
+    .hary-chip {
+      border: 1px solid var(--line, #e1e6f0);
+      background: var(--surface, #fff);
+      color: var(--steel, #4f46e5);
+      font-weight: 600;
+      font-size: 12px;
+      padding: 7px 12px;
+      border-radius: 30px;
+      cursor: pointer;
+      transition: background .15s, border-color .15s, transform .12s;
+      font-family: inherit;
+    }
+
+    .hary-chip:hover {
+      background: var(--sky, #eef1fe);
+      border-color: #cdd5fb;
+      transform: translateY(-1px);
+    }
+
+    .hary-input {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 11px 12px;
+      border-top: 1px solid var(--line, #e9edf5);
+      background: var(--surface, #fff);
+    }
+
+    .hary-input input {
+      flex: 1;
+      border: 1.5px solid var(--line, #e3e8ee);
+      border-radius: 22px;
+      padding: 11px 15px;
+      font-size: 13.5px;
+      font-family: inherit;
+      color: var(--ink, #16202e);
+      background: #fbfcff;
+    }
+
+    .hary-input input:focus {
+      outline: none;
+      border-color: var(--hg1);
+      box-shadow: 0 0 0 3px rgba(79, 70, 229, .14);
+      background: #fff;
+    }
+
+    #harySend {
+      width: 42px;
+      height: 42px;
+      flex: none;
+      border: none;
+      border-radius: 50%;
+      background: var(--hgrad);
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      transition: transform .15s, box-shadow .2s;
+      box-shadow: 0 6px 14px rgba(40, 50, 110, .28);
+    }
+
+    #harySend:hover {
+      transform: scale(1.06);
+    }
+
+    #harySend svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    .hary-foot {
+      text-align: center;
+      font-size: 10px;
+      color: var(--hint, #9aa6b8);
+      padding: 0 0 8px;
+      background: var(--surface, #fff);
+    }
 
     @media (max-width: 560px) {
-      .hary-panel { right: 0; bottom: 0; width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; border-radius: 0; }
-      #haryFab { right: 16px; bottom: 16px; }
-      .hary-fab-txt { display: none; }
-      #haryFab { padding: 14px; }
+      .hary-panel {
+        right: 0;
+        bottom: 0;
+        width: 100vw;
+        max-width: 100vw;
+        height: 100dvh;
+        max-height: 100dvh;
+        border-radius: 0;
+      }
+
+      #haryFab {
+        right: 16px;
+        bottom: 16px;
+      }
+
+      .hary-fab-txt {
+        display: none;
+      }
+
+      #haryFab {
+        padding: 14px;
+      }
     }
   </style>
 
@@ -2743,7 +3147,7 @@
       document.getElementById('loginForm').style.display = toReg ? 'none' : 'block';
       document.getElementById('registerForm').style.display = toReg ? 'block' : 'none';
       document.getElementById('authTitle').textContent = toReg ? 'Create Account' : 'Manager Login';
-      document.getElementById('authSub').textContent = toReg ? 'Register a new manager account' : 'Sign in to access the Report Analyzer'; authMsg('');
+      document.getElementById('authSub').textContent = toReg ? 'Register a new account' : 'Sign in to access the Report Analyzer'; authMsg('');
     }
     function pwScore(p) { let s = 0; if (!p) return 0; if (p.length >= 4) s++; if (p.length >= 8) s++; if (/[A-Z]/.test(p)) s++; if (/[0-9]/.test(p)) s++; if (/[^A-Za-z0-9]/.test(p)) s++; return s; }
     function pwValid(p) { return !!p && p.length >= 4; }
@@ -3600,6 +4004,38 @@
         headRow(['Sr. No.', 'Division', ...S.months.map(m => new Date(m + '-01'))], { dates: true });
         d0 = r; ORDER.forEach((d, i) => dataRow(i + 1, d, S.months.map(m => S.monPo[d][m] || 0), { fmt: ACC }));
         totalRow(3, 2 + S.months.length, d0, r - 1, ACC);
+
+        // ---- Summary02: detailed dashboard grid (exactly the filtered VIEW), Rental-style ----
+        const _data = (typeof VIEW !== 'undefined' && VIEW && VIEW.length) ? VIEW : RAW;
+        const _HEAD = 'FF0E2A43', _thin = { style: 'thin', color: { argb: 'FFBFCBDD' } }, _box = b => ({ top: b, left: b, bottom: b, right: b });
+        const _NUM = '#,##0.00', _DATE = 'dd-mmm-yyyy';
+        const ws2 = wb.addWorksheet('Summary02', { views: [{ state: 'frozen', ySplit: 1 }] });
+        ws2.addRow(columns.map(c => c.label));
+        _data.forEach(rw => ws2.addRow(columns.map(c => {
+          const v = rw[c.key];
+          if (c.type === 'num2') return (+v || 0);
+          if (c.type === 'date') return (v instanceof Date ? v : (v ? new Date(v) : ''));
+          return (v == null ? '' : v);
+        })));
+        const _h = ws2.getRow(1); _h.height = 24;
+        _h.eachCell(cell => { cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11, name: 'Calibri' }; cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: _HEAD } }; cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }; cell.border = _box(_thin); });
+        for (let R = 2; R <= _data.length + 1; R++) {
+          const row = ws2.getRow(R);
+          columns.forEach((c, ci) => {
+            const cell = row.getCell(ci + 1); cell.border = _box(_thin); cell.font = { size: 10.5, name: 'Calibri' };
+            if (c.type === 'num2') { cell.numFmt = _NUM; cell.alignment = { horizontal: 'right' }; }
+            else if (c.type === 'date') { cell.numFmt = _DATE; cell.alignment = { horizontal: 'center' }; }
+            else cell.alignment = { horizontal: 'left' };
+            if (R % 2 === 0) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF6F9FC' } };
+          });
+        }
+        columns.forEach((c, ci) => {
+          let max = String(c.label).length;
+          for (let R = 2; R <= _data.length + 1; R++) { const v = ws2.getRow(R).getCell(ci + 1).value; const len = v instanceof Date ? 12 : (typeof v === 'number' ? String(v).length + 3 : String(v == null ? '' : v).length); if (len > max) max = len; }
+          ws2.getColumn(ci + 1).width = Math.min(Math.max(max + 2, 9), 46);
+        });
+        ws2.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: columns.length } };
+
         const buf = await wb.xlsx.writeBuffer();
         const a = document.createElement('a');
         a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
@@ -3636,7 +4072,7 @@
         { key: 'b91120', xl: 'Sum of VAL 91-120', label: '91-120' },
         { key: 'b121150', xl: 'Sum of VAL121-150', label: '121-150' },
         { key: 'b151180', xl: 'Sum of VAL 151-180', label: '151-180' },
-        { key: 'b180p', xl: 'Sum of VAL>180', label: '>180' }
+        { key: 'b180p', xl: 'Sum of VAL>180', label: '180+' }
       ];
       const nrm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
       function process(wb) {
@@ -3676,7 +4112,6 @@
       const distinct = (v, k) => new Set(v.map(r => r[k]).filter(x => x && x !== '—' && x !== '(blank)')).size;
       function kpis(view) {
         const age = sumBy(view, 'ageTotal'), items = new Set(view.map(r => r.itemCode)).size;
-        const over90 = sumBy(view, 'b91120') + sumBy(view, 'b121150') + sumBy(view, 'b151180') + sumBy(view, 'b180p');
         return [
           ['Total Ageing Value', crore(age), 'sum of all buckets', '#1d9e75'],
           ['Total Stock Value', crore(sumBy(view, 'closeVal')), 'closing value', '#2f6db0'],
@@ -3686,10 +4121,10 @@
           ['Active Divisions', fmtN(distinct(view, 'division')), 'class-3 groups', '#b45309'],
           ['Active Departments', fmtN(distinct(view, 'department')), 'class-4 groups', '#475569'],
           ['Total Categories', fmtN(distinct(view, 'category')), 'class-1 desc', '#0a66c2'],
-          ['Value > 180 Days', crore(sumBy(view, 'b180p')), 'slow / non-moving', '#d8504c'],
-          ['Value > 90 Days', crore(over90), 'ageing risk', '#e08a1e'],
-          ['Fresh (0-30 Days)', crore(sumBy(view, 'b0030')), 'recent stock', '#1d9e75'],
-          ['Total Closing Qty', fmtN(sumBy(view, 'closeQty')), 'units on hand', '#2f6db0']
+          ['91-120 Days', crore(sumBy(view, 'b91120')), 'ageing value', '#e8a33d'],
+          ['121-150 Days', crore(sumBy(view, 'b121150')), 'ageing value', '#e08a1e'],
+          ['151-180 Days', crore(sumBy(view, 'b151180')), 'ageing value', '#df6f4a'],
+          ['180+ Days', crore(sumBy(view, 'b180p')), 'slow / non-moving', '#d8504c']
         ];
       }
       function charts(view) {
@@ -4186,72 +4621,72 @@
       const REPLY = (...a) => a;   // alt phrasings (anti-repetition cycles through)
       /* ── Employee directory (from emp-details.xlsx) ── */
       const EMP_RAW = [
-        {id:'14248',name:'Samar Biswas',desig:'Officer',dept:'Roller Department'},
-        {id:'15106',name:'Tanmay Yashwant Bedekar',desig:'Jr. Officer',dept:'Purchase Department'},
-        {id:'15149',name:'Vaibhav Dipak Pandit',desig:'Jr. Engineer',dept:'Asphalt Paver'},
-        {id:'15442',name:'Diwakar Kumar Pandey',desig:'Jr. Officer',dept:'Roller Department'},
-        {id:'15458',name:'Hiray Pushpak Dashrath',desig:'Officer',dept:'General Asset Department'},
-        {id:'15533',name:'Vishal Ashok Shelke',desig:'Jr. Officer',dept:'Contract Department'},
-        {id:'15634',name:'Shubham Santosh Potekar',desig:'Officer',dept:'General Asset Department'},
-        {id:'15853',name:'Rajat Rohit Takmoge',desig:'GET',dept:'Contract Department'},
-        {id:'15862',name:'Anshuman Barik',desig:'Executive',dept:'Concrete Paver'},
-        {id:'15996',name:'Rohit Kumar Mishra',desig:'Sr Officer',dept:'Roller Department'},
-        {id:'16263',name:'Nitish Kumar Singh',desig:'DET',dept:'Milling Department'},
-        {id:'16264',name:'Sandesh Sambhaji Dighe',desig:'Admin Assistant',dept:'Admin'},
-        {id:'16453',name:'Pruthviraj Haridas Wakchaure',desig:'Jr. Officer',dept:'Contract Department'},
-        {id:'16532',name:'Narendra Narayan Kathare',desig:'Assistant',dept:'HR'},
-        {id:'16641',name:'Dhaval Vijay Neve',desig:'Junior Officer',dept:'Contract Department'},
-        {id:'16812',name:'Atharv Dattatraya Shinde',desig:'Digital Executive',dept:'P&M'},
-        {id:'16813',name:'Purnima Pradhan',desig:'Officer',dept:'Excavator & Wheel loader'},
-        {id:'21046',name:'Nikhil Virendra Chavan',desig:'Asst. Purchase Manager',dept:'Purchase'},
-        {id:'21084',name:'Tulala Ashok Kumar Choudary',desig:'Sr. Engineer',dept:'Asphalt Paver'},
-        {id:'21089',name:'Balaji Mahadev Pawar',desig:'Jr. Engineer',dept:'Milling Department'},
-        {id:'21207',name:'Priyanath Paul',desig:'Jr. Engineer',dept:'General Asset Department'},
-        {id:'21234',name:'Eknath Laxman Mahale',desig:'Manager',dept:'Asphalt Paver'},
-        {id:'21266',name:'Suraj Sudam Gadekar',desig:'Jr Accountant',dept:'Accounts'},
-        {id:'21275',name:'Vishal Sudhakar Bhawar',desig:'Engineer',dept:'Milling Department'},
-        {id:'21284',name:'Arabindo Majumder',desig:'Senior Officer',dept:'HR'},
-        {id:'21294',name:'Akhil R V',desig:'Asst. Manager',dept:'P&M'},
-        {id:'21371',name:'Rajendra Janardan Ghumare',desig:'General Manager',dept:'P&M'},
-        {id:'21379',name:'Akashay Bhaurao Mankar',desig:'Engineer',dept:'Contract Department'},
-        {id:'21391',name:'Balkrushna Shankar Bhagat',desig:'Manager',dept:'Concrete Paver Department'},
-        {id:'21399',name:'Milind Prabhakar Sali',desig:'Assistant Manager',dept:'Milling Department'},
-        {id:'21402',name:'Sanjay Ganpat Shinde',desig:'Assistant Manager',dept:'Contract Department'},
-        {id:'21437',name:'Rahul Pruthviraj Deore',desig:'Sr. Engineer',dept:'Concrete Paver Department'},
-        {id:'21440',name:'Kundan Gunwant More',desig:'Asst. Manager',dept:'General Asset Department'},
-        {id:'21441',name:'Tushar Ganeshrao Kakulade',desig:'Engineer',dept:'Contract Department'},
-        {id:'21486',name:'Devidas Valmik Jadhav',desig:'Engineer',dept:'Contract Department'},
-        {id:'21487',name:'Sagar Dinkar Patil',desig:'MANAGER',dept:'Contract Department'},
-        {id:'21493',name:'Chander Prakash',desig:'JR ENGINEER',dept:'Milling Department'},
-        {id:'21563',name:'Mahesh Maruti Kumbhar',desig:'OFFICER- PURCHASE',dept:'Purchase'},
-        {id:'21566',name:'Ganesh Balasaheb Jadhav',desig:'Residance Engineer',dept:'Contract Department'},
-        {id:'21567',name:'Vikas Kumar',desig:'Engineer',dept:'General Asset Department'},
-        {id:'21571',name:'Vijay Kumar Singh',desig:'GENERAL MANAGER',dept:'P&M'},
-        {id:'21577',name:'Dixit Bharat Chitte',desig:'Executive',dept:'Purchase'},
-        {id:'21578',name:'Rahul B',desig:'Purchase Executive',dept:'Milling Department'},
-        {id:'21605',name:'Akshay Uday Neve',desig:'Sr. Engineer',dept:'Contract Department'},
-        {id:'21626',name:'Saiprasad Bagalur',desig:'Digital Executive',dept:'Roller'},
-        {id:'21627',name:'Hanamant Bhimanagouda Patil',desig:'Engineer',dept:'General Asset Department'},
-        {id:'21641',name:'Harshraj Bhagwan Patil',desig:'Engineer',dept:'Contract Department'},
-        {id:'21674',name:'Sanjay Kumar Palai',desig:'Executive',dept:'Concrete Paver Department'},
-        {id:'21675',name:'Mayur Manoj Malode',desig:'Sr Engineer',dept:'Concrete Paver Department'},
-        {id:'21686',name:'Harshal Ganapati Khadatare',desig:'Data Engineer',dept:'IT'},
-        {id:'21687',name:'Bharat Subhash Vitkurkar',desig:'Sr Manager',dept:'Purchase and Planning'},
-        {id:'21702',name:'Shrish Chandra Shukla',desig:'Asst Manager',dept:'Excavator & Wheel loader'},
-        {id:'21703',name:'Anup Kumar Maurya',desig:'Jr. Engineer',dept:'Excavator & Wheel loader'},
-        {id:'21704',name:'Rishikesh Chandrakant Suryawanshi',desig:'Engineer',dept:'Purchase'},
-        {id:'21731',name:'Aniket Sanjay Ghadge',desig:'Jr IT Administration',dept:'IT'},
-        {id:'21733',name:'Kishan Jee',desig:'Asst Manager',dept:'General Asset Department'},
-        {id:'21734',name:'Prasenjit Roul',desig:'Executive',dept:'P&M'},
-        {id:'21776',name:'Sneha Raju Ugale',desig:'Sr.Engineer',dept:'P&M'},
-        {id:'21777',name:'Vaishnavi Sanjay Jadhav',desig:'Engineer',dept:'Roller'},
-        {id:'21820',name:'Pratik Sudhakarrao Mendhe',desig:'Engineer',dept:'Milling Department'},
-        {id:'21829',name:'Jignesh Dilip Rathod',desig:'Engineer',dept:'Excavator & Wheel loader'},
-        {id:'21853',name:'Prathamesh Prabhakar Daulatabad',desig:'Account Assistant',dept:'Accounts'},
-        {id:'21855',name:'Rahul Kumar',desig:'Engineer',dept:'Excavator & Wheel loader'}
+        { id: '14248', name: 'Samar Biswas', desig: 'Officer', dept: 'Roller Department' },
+        { id: '15106', name: 'Tanmay Yashwant Bedekar', desig: 'Jr. Officer', dept: 'Purchase Department' },
+        { id: '15149', name: 'Vaibhav Dipak Pandit', desig: 'Jr. Engineer', dept: 'Asphalt Paver' },
+        { id: '15442', name: 'Diwakar Kumar Pandey', desig: 'Jr. Officer', dept: 'Roller Department' },
+        { id: '15458', name: 'Hiray Pushpak Dashrath', desig: 'Officer', dept: 'General Asset Department' },
+        { id: '15533', name: 'Vishal Ashok Shelke', desig: 'Jr. Officer', dept: 'Contract Department' },
+        { id: '15634', name: 'Shubham Santosh Potekar', desig: 'Officer', dept: 'General Asset Department' },
+        { id: '15853', name: 'Rajat Rohit Takmoge', desig: 'GET', dept: 'Contract Department' },
+        { id: '15862', name: 'Anshuman Barik', desig: 'Executive', dept: 'Concrete Paver' },
+        { id: '15996', name: 'Rohit Kumar Mishra', desig: 'Sr Officer', dept: 'Roller Department' },
+        { id: '16263', name: 'Nitish Kumar Singh', desig: 'DET', dept: 'Milling Department' },
+        { id: '16264', name: 'Sandesh Sambhaji Dighe', desig: 'Admin Assistant', dept: 'Admin' },
+        { id: '16453', name: 'Pruthviraj Haridas Wakchaure', desig: 'Jr. Officer', dept: 'Contract Department' },
+        { id: '16532', name: 'Narendra Narayan Kathare', desig: 'Assistant', dept: 'HR' },
+        { id: '16641', name: 'Dhaval Vijay Neve', desig: 'Junior Officer', dept: 'Contract Department' },
+        { id: '16812', name: 'Atharv Dattatraya Shinde', desig: 'Digital Executive', dept: 'P&M' },
+        { id: '16813', name: 'Purnima Pradhan', desig: 'Officer', dept: 'Excavator & Wheel loader' },
+        { id: '21046', name: 'Nikhil Virendra Chavan', desig: 'Asst. Purchase Manager', dept: 'Purchase' },
+        { id: '21084', name: 'Tulala Ashok Kumar Choudary', desig: 'Sr. Engineer', dept: 'Asphalt Paver' },
+        { id: '21089', name: 'Balaji Mahadev Pawar', desig: 'Jr. Engineer', dept: 'Milling Department' },
+        { id: '21207', name: 'Priyanath Paul', desig: 'Jr. Engineer', dept: 'General Asset Department' },
+        { id: '21234', name: 'Eknath Laxman Mahale', desig: 'Manager', dept: 'Asphalt Paver' },
+        { id: '21266', name: 'Suraj Sudam Gadekar', desig: 'Jr Accountant', dept: 'Accounts' },
+        { id: '21275', name: 'Vishal Sudhakar Bhawar', desig: 'Engineer', dept: 'Milling Department' },
+        { id: '21284', name: 'Arabindo Majumder', desig: 'Senior Officer', dept: 'HR' },
+        { id: '21294', name: 'Akhil R V', desig: 'Asst. Manager', dept: 'P&M' },
+        { id: '21371', name: 'Rajendra Janardan Ghumare', desig: 'General Manager', dept: 'P&M' },
+        { id: '21379', name: 'Akashay Bhaurao Mankar', desig: 'Engineer', dept: 'Contract Department' },
+        { id: '21391', name: 'Balkrushna Shankar Bhagat', desig: 'Manager', dept: 'Concrete Paver Department' },
+        { id: '21399', name: 'Milind Prabhakar Sali', desig: 'Assistant Manager', dept: 'Milling Department' },
+        { id: '21402', name: 'Sanjay Ganpat Shinde', desig: 'Assistant Manager', dept: 'Contract Department' },
+        { id: '21437', name: 'Rahul Pruthviraj Deore', desig: 'Sr. Engineer', dept: 'Concrete Paver Department' },
+        { id: '21440', name: 'Kundan Gunwant More', desig: 'Asst. Manager', dept: 'General Asset Department' },
+        { id: '21441', name: 'Tushar Ganeshrao Kakulade', desig: 'Engineer', dept: 'Contract Department' },
+        { id: '21486', name: 'Devidas Valmik Jadhav', desig: 'Engineer', dept: 'Contract Department' },
+        { id: '21487', name: 'Sagar Dinkar Patil', desig: 'MANAGER', dept: 'Contract Department' },
+        { id: '21493', name: 'Chander Prakash', desig: 'JR ENGINEER', dept: 'Milling Department' },
+        { id: '21563', name: 'Mahesh Maruti Kumbhar', desig: 'OFFICER- PURCHASE', dept: 'Purchase' },
+        { id: '21566', name: 'Ganesh Balasaheb Jadhav', desig: 'Residance Engineer', dept: 'Contract Department' },
+        { id: '21567', name: 'Vikas Kumar', desig: 'Engineer', dept: 'General Asset Department' },
+        { id: '21571', name: 'Vijay Kumar Singh', desig: 'GENERAL MANAGER', dept: 'P&M' },
+        { id: '21577', name: 'Dixit Bharat Chitte', desig: 'Executive', dept: 'Purchase' },
+        { id: '21578', name: 'Rahul B', desig: 'Purchase Executive', dept: 'Milling Department' },
+        { id: '21605', name: 'Akshay Uday Neve', desig: 'Sr. Engineer', dept: 'Contract Department' },
+        { id: '21626', name: 'Saiprasad Bagalur', desig: 'Digital Executive', dept: 'Roller' },
+        { id: '21627', name: 'Hanamant Bhimanagouda Patil', desig: 'Engineer', dept: 'General Asset Department' },
+        { id: '21641', name: 'Harshraj Bhagwan Patil', desig: 'Engineer', dept: 'Contract Department' },
+        { id: '21674', name: 'Sanjay Kumar Palai', desig: 'Executive', dept: 'Concrete Paver Department' },
+        { id: '21675', name: 'Mayur Manoj Malode', desig: 'Sr Engineer', dept: 'Concrete Paver Department' },
+        { id: '21686', name: 'Harshal Ganapati Khadatare', desig: 'Data Engineer', dept: 'IT' },
+        { id: '21687', name: 'Bharat Subhash Vitkurkar', desig: 'Sr Manager', dept: 'Purchase and Planning' },
+        { id: '21702', name: 'Shrish Chandra Shukla', desig: 'Asst Manager', dept: 'Excavator & Wheel loader' },
+        { id: '21703', name: 'Anup Kumar Maurya', desig: 'Jr. Engineer', dept: 'Excavator & Wheel loader' },
+        { id: '21704', name: 'Rishikesh Chandrakant Suryawanshi', desig: 'Engineer', dept: 'Purchase' },
+        { id: '21731', name: 'Aniket Sanjay Ghadge', desig: 'Jr IT Administration', dept: 'IT' },
+        { id: '21733', name: 'Kishan Jee', desig: 'Asst Manager', dept: 'General Asset Department' },
+        { id: '21734', name: 'Prasenjit Roul', desig: 'Executive', dept: 'P&M' },
+        { id: '21776', name: 'Sneha Raju Ugale', desig: 'Sr.Engineer', dept: 'P&M' },
+        { id: '21777', name: 'Vaishnavi Sanjay Jadhav', desig: 'Engineer', dept: 'Roller' },
+        { id: '21820', name: 'Pratik Sudhakarrao Mendhe', desig: 'Engineer', dept: 'Milling Department' },
+        { id: '21829', name: 'Jignesh Dilip Rathod', desig: 'Engineer', dept: 'Excavator & Wheel loader' },
+        { id: '21853', name: 'Prathamesh Prabhakar Daulatabad', desig: 'Account Assistant', dept: 'Accounts' },
+        { id: '21855', name: 'Rahul Kumar', desig: 'Engineer', dept: 'Excavator & Wheel loader' }
       ];
       const EMP = EMP_RAW.map(e => { const f = e.name.toLowerCase(); return { id: e.id, name: e.name, desig: e.desig, dept: e.dept, full: ' ' + f + ' ', tokens: f.split(/\s+/).filter(Boolean) }; });
-      const EMP_STOP = new Set(['more','info','find','name','who','whom','what','help','the','and','for','details','detail','employee','employees','staff','dept','department','departments','designation','of','id','search','about','tell','me','show','is','a','an','his','her','their','this','that','please','give','do','you','know']);
+      const EMP_STOP = new Set(['more', 'info', 'find', 'name', 'who', 'whom', 'what', 'help', 'the', 'and', 'for', 'details', 'detail', 'employee', 'employees', 'staff', 'dept', 'department', 'departments', 'designation', 'of', 'id', 'search', 'about', 'tell', 'me', 'show', 'is', 'a', 'an', 'his', 'her', 'their', 'this', 'that', 'please', 'give', 'do', 'you', 'know']);
       function empNorm(s) { return ' ' + String(s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim() + ' '; }
       function empMatch(q) {
         const s = empNorm(q), trimmed = s.trim();
@@ -4259,7 +4694,7 @@
         const idHit = trimmed.match(/\b(\d{4,6})\b/);
         if (idHit && trimmed.split(' ').length <= 3) { const e = EMP.find(x => x.id === idHit[1]); if (e) return { matches: [e], q: idHit[1] }; }
         // strip lead/trigger phrases
-        const triggers = ['who is','whos','who s','tell me about','tell me','details of','detail of','details for','details about','give me details of','give details of','info about','information about','information on','look up','lookup','search for','find out','find','search','show me','about','designation of','department of','dept of','employee id of','employee','staff member','staff','member'];
+        const triggers = ['who is', 'whos', 'who s', 'tell me about', 'tell me', 'details of', 'detail of', 'details for', 'details about', 'give me details of', 'give details of', 'info about', 'information about', 'information on', 'look up', 'lookup', 'search for', 'find out', 'find', 'search', 'show me', 'about', 'designation of', 'department of', 'dept of', 'employee id of', 'employee', 'staff member', 'staff', 'member'];
         let cleaned = s;
         triggers.forEach(t => cleaned = cleaned.replace(new RegExp('(^| )' + t.replace(/ /g, ' ') + '( |$)', 'g'), ' '));
         cleaned = cleaned.replace(/\b(details?|designation|department|dept|info|information|please|the|of|a|an|is|id|name|profile|contact)\b/g, ' ').replace(/\s+/g, ' ').trim();
@@ -4294,27 +4729,27 @@
             `Hello${userName() ? ' ' + userName() : ''}! 😊 Hary here. Ask me about the **P&M**, **PO-GIN** or **Stock** reports, uploading Excel, filters, KPIs — or just tell me what you're trying to get done.`)
         },
         {
-          id: 'identity', phrases: ['name','who are you', 'what are you', 'your name', 'about you', 'what is hary', 'who is hary', 'introduce yourself'],
+          id: 'identity', phrases: ['name', 'who are you', 'what are you', 'your name', 'about you', 'what is hary', 'who is hary', 'introduce yourself'],
           tags: [], answer: () => REPLY(`I'm **Hary** — the AI assistant built into the Vision Infra Equipment Solutions Report Analyzer. Think of me as a colleague who knows this application inside-out: reports, dashboards, uploads, filters and calculations. Ask me anything!`)
         },
         {
-          id: 'workplace', phrases: ['viesl','company','where do you work', 'which company', 'who do you work for', 'your company', 'where are you from', 'your office'],
+          id: 'workplace', phrases: ['viesl', 'company', 'where do you work', 'which company', 'who do you work for', 'your company', 'where are you from', 'your office'],
           tags: [], answer: () => REPLY(`I work right here as the AI assistant for **Vision Infra Equipment Solutions Limited**. I'm always available to help you with reports, dashboards and data analysis. 🙂`)
         },
         {
-          id: 'developer', phrases: ['harshal','who developed you', 'who made you', 'who created you', 'who built you', 'your developer', 'who is harshal', 'who designed you'],
+          id: 'developer', phrases: ['harshal', 'who developed you', 'who made you', 'who created you', 'who built you', 'your developer', 'who is harshal', 'who designed you'],
           tags: [], answer: () => REPLY(`I was developed by **Mr. Harshal**. He built this whole Report Analyzer platform — I'm the friendly assistant he added to make your work easier.`)
         },
         {
-          id: 'sandeep', phrases: ['sandeep','who is sandeep', 'who is mr sandeep', 'who is sandeep patil', 'about sandeep', 'tell me about sandeep', 'sandeep patil', 'sandeep'],
+          id: 'sandeep', phrases: ['sandeep', 'who is sandeep', 'who is mr sandeep', 'who is sandeep patil', 'about sandeep', 'tell me about sandeep', 'sandeep patil', 'sandeep'],
           tags: [], answer: () => REPLY(`He is my manager — **Mr. Sandeep Patil**. He guides and supports **Mr. Harshal** in building the logical reports behind this platform. 🙂 You can reach him at <a href="mailto:pnm_audit@visioninfraindia.com">pnm_audit@visioninfraindia.com</a>.`)
         },
         {
-          id: 'dob', phrases: ['dob','date of birth', 'when were you born', 'your birthday', 'your age', 'how old are you', 'dob'],
+          id: 'dob', phrases: ['dob', 'date of birth', 'when were you born', 'your birthday', 'your age', 'how old are you', 'dob'],
           tags: [], answer: () => REPLY(`You can say I was born on **15 June 2026** 🎂 — still young, but I already know this application by heart!`)
         },
         {
-          id: 'father', phrases: ['father','your father','who is your father', 'your father', 'your mother', 'your parents', 'your family', 'your creator language'],
+          id: 'father', phrases: ['father', 'your father', 'who is your father', 'your father', 'your mother', 'your parents', 'your family', 'your creator language'],
           tags: [], answer: () => REPLY(`😄 I'd say my father is the **Python programming language**, because that's where much of my intelligence comes from! And my home is right here in this browser.`)
         },
         {
@@ -4326,7 +4761,7 @@
           tags: [], answer: () => REPLY(`I'm an AI assistant 🤖 — no sleep, no chai breaks, available 24/7. But I try to be as friendly and helpful as your best colleague.`)
         },
         {
-          id: 'joke', phrases: ['joke','tell me a joke', 'make me laugh', 'say something funny', 'a joke', 'funny'],
+          id: 'joke', phrases: ['joke', 'tell me a joke', 'make me laugh', 'say something funny', 'a joke', 'funny'],
           tags: [], answer: () => REPLY(
             `Why did the spreadsheet go to therapy? It had too many **unresolved cells**! 😄 Now… shall we resolve some of your data instead?`,
             `I asked a stock item how it felt. It said *"a bit depreciated."* 📉 Okay, back to work — what can I help with?`,
@@ -4445,7 +4880,7 @@
           tags: [], answer: () => REPLY(`You're welcome! 😊 Happy to help anytime. Anything else about the reports or dashboards?`, `Glad that helped! 🙌 I'm right here if you need anything else.`)
         },
         {
-          id: 'bye', phrases: ['by','bye', 'goodbye', 'see you', 'exit', 'close', 'that is all', 'no thanks', 'good night'],
+          id: 'bye', phrases: ['by', 'bye', 'goodbye', 'see you', 'exit', 'close', 'that is all', 'no thanks', 'good night'],
           tags: [], answer: () => REPLY(`Goodbye${userName() ? ', ' + userName() : ''}! 👋 Come back whenever you need a hand with your reports. Have a great day!`)
         }
       ];
