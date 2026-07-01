@@ -4370,15 +4370,15 @@
         const mk = monthsOrdered(view); let growth = null;
         if (mk.length >= 2) { const last = view.filter(r => r.monthKey === mk[mk.length - 1]).reduce((s, r) => s + r.assetIncome, 0); const prev = view.filter(r => r.monthKey === mk[mk.length - 2]).reduce((s, r) => s + r.assetIncome, 0); growth = prev ? (last - prev) / prev : null; }
         return [
-          ['Total Sales', crore(sales), 'assetwise income', '#2f6db0'],
-          ['Total Revenue', crore(sum(view, 'amount')), 'invoice value (incl GST)', '#1d9e75'],
+          ['Total Sales (Excluding GST)', crore(sales), 'Assetwise income', '#2f6db0'],
+          ['Total Revenue', crore(sum(view, 'amount')), 'Invoice value (incl GST)', '#1d9e75'],
           ['Net Taxable Sales', crore(sum(view, 'taxable')), 'ex-GST value', '#0891b2'],
           ['Total GST', crore(sum(view, 'gst')), 'CGST + SGST + IGST', '#e08a1e'],
           ['Total Orders', fmtN(orders), 'distinct invoices', '#163a5c'],
-          ['Total Quantity Sold', fmtN(sum(view, 'payQty'), 2), 'pay qty', '#b45309'],
+          
           ['Total Assets', fmtN(distinct(view, 'assetCode')), 'distinct equipment', '#7c5cbf'],
           ['Active Customers', fmtN(distinct(view, 'customer')), 'billed parties', '#0a66c2'],
-          ['Avg Order Value', '\u20b9' + fmtN(aov), 'sales / order', '#475569'],
+          
           ['Sales Growth', growth == null ? '\u2014' : (growth >= 0 ? '+' : '') + fmtN(growth * 100, 1) + '%', 'latest vs prev month', growth == null ? '#8a98a4' : (growth >= 0 ? '#1d9e75' : '#d8504c')],
           ['Total Working Months', fmtN(distinct(view, 'wmLabel')), 'distinct working months', '#6f57c2'],
           ['Total Products', fmtN(distinct(view, 'itemCode')), 'distinct item codes', '#2f6db0']
@@ -4461,17 +4461,21 @@
         { key: 'assetIncome', label: 'Assetwise Income', fmt: 'cr' }, { key: 'amount', label: 'Total Amount', fmt: 'cr' }
       ];
       const filters = [
-        { key: 'assetCode', label: 'Asset (Equip Code)', multi: true },
-        { key: 'assetDesc', label: 'Asset Description', multi: true },
-        { key: 'customer', label: 'Customer', multi: true },
-        { key: 'site', label: 'Site', multi: true },
-        { key: 'state', label: 'Region / State', multi: true },
-        { key: 'equipType', label: 'Category (Equipment Type)', multi: true },
         { key: 'lob', label: 'Division (Line of Business)', multi: true },
-        { key: 'itemCode', label: 'Item Code', multi: true },
-        { key: 'wmLabel', label: 'Working Month', multi: true },
+        { key: 'equipType', label: 'Category (Equipment Type)', multi: true },
+        { key: 'customer', label: 'Customer', multi: true },
         { key: 'monthLbl', label: 'Month', multi: true },
         { key: 'year', label: 'Year', multi: true },
+        { key: 'assetCode', label: 'Asset (Equip Code)', multi: true },
+        { key: 'assetDesc', label: 'Asset Description', multi: true },
+        
+        { key: 'site', label: 'Location', multi: true },
+        { key: 'state', label: 'Region / State', multi: true },
+        
+        
+        { key: 'itemCode', label: 'Item Code', multi: true },
+        { key: 'wmLabel', label: 'Working Month', multi: true },
+        
         { key: 'invDate', label: 'Document Date range', type: 'daterange' }
       ];
 
