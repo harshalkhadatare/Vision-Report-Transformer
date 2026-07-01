@@ -1940,7 +1940,7 @@
   <!-- ===== LOGIN / REGISTER ===== -->
   <section id="authView">
     <div class="auth-card">
-      <div class="auth-brand"><b>Vision Infra Equipment Solutions Ltd.</b></div>
+      <div class="auth-brand"><b>Vision Infra Equipment Solutions Ltd</b></div>
       <h2 id="authTitle">Login</h2>
       <p class="sub" id="authSub">Sign in to access the Report Analyzer</p>
       <div class="auth-msg" id="authMsg"></div>
@@ -1983,7 +1983,7 @@
               onerror="this.style.display='none';this.parentNode.classList.add('logo-fallback');">
           </div>
           <div class="brand-text">
-            <b>Vision Infra Equipment Solutions Ltd.</b>
+            <b>Vision Infra Equipment Solutions Ltd</b>
             <span id="brandSub">P&M Report Analyzer</span>
           </div>
         </div>
@@ -4278,6 +4278,321 @@
         hint: 'Upload the ERP <b>ageing dump</b> (workbook with a <b>Master</b> sheet: Item Code, the <b>VAL 0-30 \u2026 VAL>180</b> buckets, Location Name, Class descriptions\u2026). Filter by site / division / category / ageing bucket and search by Item Code \u2014 KPIs &amp; charts update live in <b>\u20b9 Cr</b>. The Excel export gives the <b>Master</b> detail sheet and a 3-pivot <b>Summery</b> (by Item Class Type, Category &amp; Site).',
         sheetName: 'Ageing', exportName: 'VisionInfra-Ageing-Report',
         process, kpis, charts, columns, tableColumns, filters, searchKeys: ['itemCode', 'desc', 'site', 'division', 'category'], exportExcel
+      };
+    })();
+
+    /* ===================== SALES DASHBOARD ===================== */
+    REPORTS.sales = (function () {
+      const DEF = {
+        invoice: ['documentno', 'docno', 'invoiceno', 'invoice'],
+        invDate: ['documentdate', 'docdate', 'invoicedate'],
+        docDesc: ['docdescrp', 'documentdescription', 'docdescription'],
+        customer: ['partyname', 'customername', 'customer'],
+        gstin: ['pgstinno', 'gstinno', 'gstin'],
+        woNo: ['partywonumber', 'wonumber', 'wono'],
+        itemCode: ['itemcode'],
+        itemDesc: ['itemdescription', 'itemdesc'],
+        payQty: ['payqty'],
+        taxable: ['gsttxabl', 'gsttaxable', 'taxablevalue', 'taxable'],
+        cgst: ['cgsttax', 'cgst'], sgst: ['sgsttax', 'sgst'], igst: ['igsttax', 'igst'],
+        amount: ['totalamount', 'invoicevalue', 'totalvalue', 'grandtotal'],
+        lob: ['lobdesc', 'lineofbusiness', 'lob'],
+        site: ['sitename', 'site'],
+        assetCode: ['equipcode', 'equipmentcode', 'assetcode'],
+        assetDesc: ['equipdescr', 'equipmentdescription', 'assetdescription'],
+        equipType: ['equipmenttype', 'fleettype', 'equiptype'],
+        make: ['make', 'manufacturer'],
+        yom: ['yom'],
+        workFrom: ['workingform', 'workingfrom'], workTo: ['workingto'], workMonth: ['workingmonth'],
+        invQty: ['invqty'],
+        assetIncome: ['assetwiseincome', 'assetincome'],
+        gstCode: ['gstcode']
+      };
+      const MONF = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+      function process(wb) {
+        // choose the Master sheet (name containing "master"), else first sheet
+        let sheet = wb.SheetNames.find(n => norm(n).includes('master')) || wb.SheetNames[0];
+        const aoa = XLSX.utils.sheet_to_json(wb.Sheets[sheet], { header: 1, defval: '', raw: true });
+        if (!aoa.length) throw new Error('The sheet is empty.');
+        const hr = findHeader(aoa, ['documentno', 'totalamount', 'gsttxabl', 'partyname']);
+        const idx = mapCols(aoa[hr] || [], DEF);
+        if (idx.amount === undefined || (idx.invoice === undefined && idx.customer === undefined))
+          throw new Error('This file is not a Sales master (need "Document No", "TOTAL_AMOUNT / GST_TXABL", "Party Name" …).');
+        const g = (r, k) => idx[k] !== undefined ? r[idx[k]] : '';
+        const t = (r, k, d) => { const v = String(g(r, k) ?? '').trim(); return v || (d || ''); };
+        const rows = []; let multiYear = new Set();
+        for (let i = hr + 1; i < aoa.length; i++) {
+          const r = aoa[i]; if (!r) continue;
+          const invoice = String(g(r, 'invoice') ?? '').trim();
+          const customer = String(g(r, 'customer') ?? '').trim();
+          const amount = numv(g(r, 'amount'));
+          if (!invoice && !customer && !amount) continue;
+          const d = idx.invDate !== undefined ? toDate(g(r, 'invDate')) : null;
+          const wm = idx.workMonth !== undefined ? toDate(g(r, 'workMonth')) : null;
+          const site = t(r, 'site', '(blank)');
+          const seg = site.split('/');
+          const taxable = numv(g(r, 'taxable'));
+          const o = {
+            invoice, invDate: d, docDesc: t(r, 'docDesc'), customer: customer || '(blank)',
+            gstin: t(r, 'gstin'), woNo: t(r, 'woNo'), itemCode: t(r, 'itemCode', '(blank)'), itemDesc: t(r, 'itemDesc'),
+            payQty: numv(g(r, 'payQty')), invQty: numv(g(r, 'invQty')),
+            taxable, cgst: numv(g(r, 'cgst')), sgst: numv(g(r, 'sgst')), igst: numv(g(r, 'igst')),
+            amount, gst: amount - taxable, lob: t(r, 'lob', '(blank)'), site,
+            state: seg.length ? seg[0].trim() : '(blank)', city: seg.length >= 3 ? seg[2].trim() : '(blank)',
+            assetCode: t(r, 'assetCode', '(blank)'), assetDesc: t(r, 'assetDesc'),
+            equipType: t(r, 'equipType', '(blank)'), make: t(r, 'make', '(blank)'),
+            yom: t(r, 'yom'), assetIncome: numv(g(r, 'assetIncome')), workMonth: wm,
+            month: d ? MONF[d.getMonth()] : '(blank)', year: d ? String(d.getFullYear()) : '(blank)',
+            monthKey: d ? d.getFullYear() * 12 + d.getMonth() : -1,
+            wmLabel: wm ? MONF[wm.getMonth()] + '-' + wm.getFullYear() : '(blank)',
+            wmKey: wm ? wm.getFullYear() * 12 + wm.getMonth() : -1
+          };
+          if (d) multiYear.add(d.getFullYear());
+          rows.push(o);
+        }
+        if (!rows.length) throw new Error('No data rows found under the header.');
+        // friendly month label (append year only when multiple years present)
+        const my = multiYear.size > 1;
+        rows.forEach(r => r.monthLbl = (r.month === '(blank)') ? '(blank)' : (my ? r.month + '-' + r.year : r.month));
+        const tot = rows.reduce((s, r) => s + r.assetIncome, 0);
+        return { rows, note: `${fmtN(rows.length)} line items \u00b7 ${fmtN(new Set(rows.map(r => r.invoice)).size)} invoices \u00b7 total sales ${crore(tot)} \u00b7 filter, search & export the <b>Master Data + Dashboard + R1 + R2</b> workbook.` };
+      }
+
+      const sum = (v, k) => v.reduce((s, r) => s + (+r[k] || 0), 0);
+      const distinct = (v, k) => new Set(v.map(r => r[k]).filter(x => x && x !== '(blank)')).size;
+      const topGroup = (v, key, meas, n) => { const o = {}; v.forEach(r => { const g = r[key] || '(blank)'; o[g] = (o[g] || 0) + (+r[meas] || 0); }); return Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, n || 999); };
+      const monthsOrdered = v => [...new Set(v.filter(r => r.monthKey >= 0).map(r => r.monthKey))].sort((a, b) => a - b);
+
+      function kpis(view) {
+        const sales = sum(view, 'assetIncome'), orders = distinct(view, 'invoice');
+        const aov = orders ? sales / orders : 0;
+        const mk = monthsOrdered(view); let growth = null;
+        if (mk.length >= 2) { const last = view.filter(r => r.monthKey === mk[mk.length - 1]).reduce((s, r) => s + r.assetIncome, 0); const prev = view.filter(r => r.monthKey === mk[mk.length - 2]).reduce((s, r) => s + r.assetIncome, 0); growth = prev ? (last - prev) / prev : null; }
+        return [
+          ['Total Sales', crore(sales), 'assetwise income', '#2f6db0'],
+          ['Total Revenue', crore(sum(view, 'amount')), 'invoice value (incl GST)', '#1d9e75'],
+          ['Net Taxable Sales', crore(sum(view, 'taxable')), 'ex-GST value', '#0891b2'],
+          ['Total GST', crore(sum(view, 'gst')), 'CGST + SGST + IGST', '#e08a1e'],
+          ['Total Orders', fmtN(orders), 'distinct invoices', '#163a5c'],
+          ['Total Quantity Sold', fmtN(sum(view, 'payQty'), 2), 'pay qty', '#b45309'],
+          ['Total Assets', fmtN(distinct(view, 'assetCode')), 'distinct equipment', '#7c5cbf'],
+          ['Active Customers', fmtN(distinct(view, 'customer')), 'billed parties', '#0a66c2'],
+          ['Avg Order Value', '\u20b9' + fmtN(aov), 'sales / order', '#475569'],
+          ['Sales Growth', growth == null ? '\u2014' : (growth >= 0 ? '+' : '') + fmtN(growth * 100, 1) + '%', 'latest vs prev month', growth == null ? '#8a98a4' : (growth >= 0 ? '#1d9e75' : '#d8504c')],
+          ['Total Working Months', fmtN(distinct(view, 'wmLabel')), 'distinct working months', '#6f57c2'],
+          ['Total Products', fmtN(distinct(view, 'itemCode')), 'distinct item codes', '#2f6db0']
+        ];
+      }
+
+      function charts(view) {
+        const opts = g => ({ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, ...g });
+        const crAxis = { ticks: { callback: x => fmtN(x, 2) } };
+        const tipX = c => ' ' + fmtN(c.parsed.x, 2) + ' Cr', tipY = c => ' ' + fmtN(c.parsed.y, 2) + ' Cr';
+        const COL = ['#2f6db0', '#1d9e75', '#f59e0b', '#163a5c', '#8a98a4', '#d8504c', '#6f57c2', '#0a66c2', '#b45309', '#0891b2'];
+        const mk = monthsOrdered(view), mlab = mk.map(k => MONF[k % 12] + '-' + Math.floor(k / 12));
+        const monthSum = (k, meas) => view.filter(r => r.monthKey === k).reduce((s, r) => s + (+r[meas] || 0), 0);
+        const barTop = (key, title, sub, color, n, horiz) => ({
+          title, sub, height: horiz ? 360 : 330, render(cv) {
+            const e = topGroup(view, key, 'assetIncome', n);
+            const o = opts({ indexAxis: horiz ? 'y' : 'x', plugins: { legend: { display: false }, tooltip: { callbacks: { label: horiz ? tipX : tipY } } }, scales: horiz ? { x: crAxis, y: { ticks: { font: { size: 9 } } } } : { y: crAxis, x: { ticks: { maxRotation: 50, autoSkip: false, font: { size: 9 } } } } });
+            return new Chart(cv, { type: 'bar', data: { labels: e.map(x => x[0]), datasets: [{ data: e.map(x => crN(x[1])), backgroundColor: color, borderRadius: 5 }] }, options: o });
+          }
+        });
+        return [
+          {
+            title: 'Monthly Sales Trend', sub: 'assetwise income \u00b7 \u20b9 Cr', height: 330, render(cv) {
+              const val = mk.map(k => crN(monthSum(k, 'assetIncome')));
+              return new Chart(cv, { type: 'line', data: { labels: mlab, datasets: [{ data: val, borderColor: '#2f6db0', backgroundColor: 'rgba(47,109,176,.14)', fill: true, tension: .35, borderWidth: 3, pointRadius: 4, pointBackgroundColor: '#2f6db0' }] }, options: opts({ plugins: { legend: { display: false }, tooltip: { callbacks: { label: tipY } } }, scales: { y: crAxis } }) });
+            }
+          },
+          {
+            title: 'Top 10 Assets', sub: 'equip code \u00b7 \u20b9 Cr', height: 360, render(cv) {
+              const o = {}; view.forEach(r => { const k = r.assetCode || '(blank)'; if (!o[k]) o[k] = { v: 0, d: r.assetDesc || r.equipType }; o[k].v += (+r.assetIncome || 0); });
+              const e = Object.entries(o).sort((a, b) => b[1].v - a[1].v).slice(0, 10);
+              return new Chart(cv, { type: 'bar', data: { labels: e.map(x => x[0]), datasets: [{ data: e.map(x => crN(x[1].v)), backgroundColor: '#1d9e75', borderRadius: 5 }] }, options: opts({ indexAxis: 'y', plugins: { legend: { display: false }, tooltip: { callbacks: { title: it => { const i = it[0].dataIndex; return e[i][0] + (e[i][1].d ? ' \u2014 ' + e[i][1].d : ''); }, label: tipX } } }, scales: { x: crAxis, y: { ticks: { font: { size: 9 } } } } }) });
+            }
+          },
+          barTop('equipType', 'Sales by Asset Type', 'equipment type \u00b7 top 12 \u00b7 \u20b9 Cr', '#163a5c', 12, false),
+          barTop('customer', 'Sales by Customer', 'top 10 \u00b7 \u20b9 Cr', '#2f6db0', 10, true),
+          {
+            title: 'Sales Distribution', sub: 'by line of business \u00b7 \u20b9 Cr', height: 330, render(cv) {
+              const e = topGroup(view, 'lob', 'assetIncome');
+              return new Chart(cv, { type: 'doughnut', data: { labels: e.map(x => x[0]), datasets: [{ data: e.map(x => crN(x[1])), backgroundColor: e.map((_, i) => COL[i % COL.length]), borderWidth: 2, borderColor: '#fff' }] }, options: opts({ cutout: '58%', plugins: { legend: { position: 'right', labels: { boxWidth: 12, font: { size: 11 } } }, tooltip: { callbacks: { label: c => ' ' + c.label + ': ' + fmtN(c.parsed, 2) + ' Cr' } } } }) });
+            }
+          },
+          {
+            title: 'Quantity vs Sales Value', sub: 'monthly qty (bar) vs income (line)', height: 330, render(cv) {
+              const qty = mk.map(k => view.filter(r => r.monthKey === k).reduce((s, r) => s + (+r.payQty || 0), 0));
+              const val = mk.map(k => crN(monthSum(k, 'assetIncome')));
+              return new Chart(cv, { type: 'bar', data: { labels: mlab, datasets: [
+                { type: 'bar', label: 'Quantity', data: qty, backgroundColor: '#9ec6ef', borderRadius: 5, yAxisID: 'y' },
+                { type: 'line', label: 'Income (\u20b9 Cr)', data: val, borderColor: '#d8504c', backgroundColor: 'rgba(216,80,76,.15)', borderWidth: 3, tension: .35, pointRadius: 4, yAxisID: 'y1' }
+              ] }, options: opts({ plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 12, font: { size: 10 } } } }, scales: { y: { position: 'left', ticks: { callback: v => fmtN(v) } }, y1: { position: 'right', grid: { drawOnChartArea: false }, ticks: { callback: v => fmtN(v, 1) } } } }) });
+            }
+          },
+          {
+            title: 'Monthly Asset-wise Income', sub: 'top asset types \u00d7 month \u00b7 \u20b9 Cr', height: 330, render(cv) {
+              const top = topGroup(view, 'equipType', 'assetIncome', 5).map(x => x[0]);
+              const ds = top.map((t, i) => ({ label: t, data: mk.map(k => crN(view.filter(r => r.monthKey === k && (r.equipType || '(blank)') === t).reduce((s, r) => s + (+r.assetIncome || 0), 0))), backgroundColor: COL[i % COL.length], borderRadius: 4, stack: 's' }));
+              return new Chart(cv, { type: 'bar', data: { labels: mlab, datasets: ds }, options: opts({ plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 12, font: { size: 9 } } }, tooltip: { callbacks: { label: c => ' ' + c.dataset.label + ': ' + fmtN(c.parsed.y, 2) + ' Cr' } } }, scales: { x: { stacked: true }, y: { stacked: true, ticks: { callback: v => fmtN(v, 1) } } } }) });
+            }
+          },
+          barTop('state', 'Sales by Region / State', '\u20b9 Cr', '#e08a1e', 14, false)
+        ];
+      }
+
+      const columns = [
+        { key: 'invoice', label: 'Document No', type: 'text' }, { key: 'invDate', label: 'Document Date', type: 'date' },
+        { key: 'customer', label: 'Customer', type: 'text' }, { key: 'itemCode', label: 'Item Code', type: 'text' },
+        { key: 'itemDesc', label: 'Item Description', type: 'text' }, { key: 'lob', label: 'Line of Business', type: 'text' },
+        { key: 'site', label: 'Site', type: 'text' }, { key: 'state', label: 'State', type: 'text' },
+        { key: 'assetCode', label: 'Equip Code', type: 'text' }, { key: 'equipType', label: 'Equipment Type', type: 'text' },
+        { key: 'make', label: 'Make', type: 'text' }, { key: 'payQty', label: 'Pay Qty', type: 'num2' },
+        { key: 'taxable', label: 'Taxable Value', type: 'num2' }, { key: 'gst', label: 'GST', type: 'num2' },
+        { key: 'amount', label: 'Total Amount', type: 'num2' }, { key: 'assetIncome', label: 'Assetwise Income', type: 'num2' }
+      ];
+      const tableColumns = [
+        { key: 'invoice', label: 'Document No', fmt: 'text' }, { key: 'invDate', label: 'Date', fmt: 'date' },
+        { key: 'customer', label: 'Customer', fmt: 'text' }, { key: 'itemCode', label: 'Item Code', fmt: 'text' },
+        { key: 'itemDesc', label: 'Item Description', fmt: 'text' }, { key: 'lob', label: 'LOB', fmt: 'text' },
+        { key: 'site', label: 'Site', fmt: 'text' }, { key: 'equipType', label: 'Equip Type', fmt: 'text' },
+        { key: 'make', label: 'Make', fmt: 'text' }, { key: 'payQty', label: 'Qty', fmt: 'num2' },
+        { key: 'assetIncome', label: 'Assetwise Income', fmt: 'cr' }, { key: 'amount', label: 'Total Amount', fmt: 'cr' }
+      ];
+      const filters = [
+        { key: 'assetCode', label: 'Asset (Equip Code)', multi: true },
+        { key: 'assetDesc', label: 'Asset Description', multi: true },
+        { key: 'customer', label: 'Customer', multi: true },
+        { key: 'site', label: 'Site', multi: true },
+        { key: 'state', label: 'Region / State', multi: true },
+        { key: 'equipType', label: 'Category (Equipment Type)', multi: true },
+        { key: 'lob', label: 'Division (Line of Business)', multi: true },
+        { key: 'itemCode', label: 'Item Code', multi: true },
+        { key: 'wmLabel', label: 'Working Month', multi: true },
+        { key: 'monthLbl', label: 'Month', multi: true },
+        { key: 'year', label: 'Year', multi: true },
+        { key: 'invDate', label: 'Document Date range', type: 'daterange' }
+      ];
+
+      /* ---------- Excel export: Master Data + Dashboard + R1 + R2 ---------- */
+      async function exportExcel(fileName) {
+        const data = (typeof VIEW !== 'undefined' && VIEW && VIEW.length) ? VIEW : RAW;
+        const wb = new ExcelJS.Workbook(); wb.creator = 'Vision Infra Report Analyzer';
+        const HEAD = 'FF0E2A43', GREY = 'FFF3F6FB', TOTAL = 'FFD7E1F2', TITLEBG = 'FF16456C';
+        const thin = { style: 'thin', color: { argb: 'FFBFCBDD' } }, box = b => ({ top: b, left: b, bottom: b, right: b });
+        const NUM = '#,##0.00', DATEF = 'dd-mmm-yyyy';
+        const styleHeadRow = (ws, rowNo, ncol) => { const h = ws.getRow(rowNo); h.height = 22; for (let c = 1; c <= ncol; c++) { const x = ws.getCell(rowNo, c); x.font = { bold: true, color: { argb: 'FFFFFFFF' }, name: 'Calibri', size: 11 }; x.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEAD } }; x.alignment = { horizontal: c === 1 ? 'left' : 'center', vertical: 'middle', wrapText: true }; x.border = box(thin); } };
+
+        /* ---- Sheet 1: Master Data (detail, Rental-style) ---- */
+        const wsM = wb.addWorksheet('Master Data', { views: [{ state: 'frozen', ySplit: 1 }] });
+        wsM.addRow(columns.map(c => c.label));
+        data.forEach(r => wsM.addRow(columns.map(c => {
+          const v = r[c.key];
+          if (c.type === 'num2') return (+v || 0);
+          if (c.type === 'date') return (v instanceof Date ? v : '');
+          return (v == null ? '' : v);
+        })));
+        styleHeadRow(wsM, 1, columns.length);
+        for (let R = 2; R <= data.length + 1; R++) {
+          const row = wsM.getRow(R);
+          columns.forEach((c, ci) => {
+            const cell = row.getCell(ci + 1); cell.border = box(thin); cell.font = { size: 10.5, name: 'Calibri' };
+            if (c.type === 'num2') { cell.numFmt = NUM; cell.alignment = { horizontal: 'right' }; }
+            else if (c.type === 'date') { cell.numFmt = DATEF; cell.alignment = { horizontal: 'center' }; }
+            else cell.alignment = { horizontal: 'left' };
+            if (R % 2 === 0) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF6F9FC' } };
+          });
+        }
+        columns.forEach((c, ci) => {
+          let max = String(c.label).length;
+          for (let R = 2; R <= data.length + 1; R++) { const v = wsM.getRow(R).getCell(ci + 1).value; const len = v instanceof Date ? 12 : (typeof v === 'number' ? String(v).length + 3 : String(v == null ? '' : v).length); if (len > max) max = len; }
+          wsM.getColumn(ci + 1).width = Math.min(Math.max(max + 2, 9), 46);
+        });
+        wsM.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: columns.length } };
+
+        // shared matrix pivot writer (row dim × col dim + Grand Total row/col)
+        const colLetter = ws => (c => ws.getColumn(c).letter);
+        function writeMatrix(ws, startRow, title, rowHdr, colLabels, entries, measFmt) {
+          const NC = colLabels.length + 2; // Row label + cols + Total
+          ws.mergeCells(startRow, 1, startRow, NC);
+          const tc = ws.getCell(startRow, 1); tc.value = title; tc.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 12, name: 'Calibri' };
+          tc.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: TITLEBG } }; tc.alignment = { horizontal: 'left', vertical: 'middle' }; ws.getRow(startRow).height = 22;
+          const hRow = startRow + 1;
+          ws.getCell(hRow, 1).value = rowHdr; colLabels.forEach((c, i) => ws.getCell(hRow, i + 2).value = c); ws.getCell(hRow, NC).value = 'Grand Total';
+          styleHeadRow(ws, hRow, NC);
+          const L = colLetter(ws); let r = hRow + 1; const d0 = r;
+          entries.forEach(([name, vals]) => {
+            ws.getCell(r, 1).value = name;
+            colLabels.forEach((c, i) => ws.getCell(r, i + 2).value = vals[c] || 0);
+            ws.getCell(r, NC).value = { formula: `SUM(${L(2)}${r}:${L(NC - 1)}${r})` };
+            for (let c = 1; c <= NC; c++) { const x = ws.getCell(r, c); x.border = box(thin); x.font = { name: 'Calibri', size: 10.5 }; if (c > 1) { x.numFmt = measFmt; x.alignment = { horizontal: 'right' }; } else x.alignment = { horizontal: 'left' }; if ((r - d0) % 2 === 1) x.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GREY } }; }
+            r++;
+          });
+          const gt = r; ws.getCell(gt, 1).value = 'Grand Total';
+          for (let c = 2; c <= NC; c++) { const l = L(c); ws.getCell(gt, c).value = { formula: `SUM(${l}${d0}:${l}${gt - 1})` }; }
+          for (let c = 1; c <= NC; c++) { const x = ws.getCell(gt, c); x.font = { bold: true, name: 'Calibri', size: 10.5 }; x.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: TOTAL } }; x.border = box(thin); if (c > 1) { x.numFmt = measFmt; x.alignment = { horizontal: 'right' }; } else x.alignment = { horizontal: 'left' }; }
+          return gt;
+        }
+        const pivotRC = (rowKey, meas, colOrder, rowEntries) => {
+          const o = {}; data.forEach(r => { const rk = r[rowKey] || '(blank)'; const ck = r.lob || '(blank)'; (o[rk] = o[rk] || {})[ck] = (o[rk][ck] || 0) + (+r[meas] || 0); }); return o;
+        };
+        const lobCols = [...new Set(data.map(r => r.lob || '(blank)'))].sort();
+        const monthOrder = [...new Set(data.filter(r => r.monthKey >= 0).map(r => r.monthKey))].sort((a, b) => a - b);
+        const monthLabelOf = k => MONF[k % 12] + '-' + Math.floor(k / 12);
+
+        /* ---- Sheet 2: Dashboard ---- */
+        const wsD = wb.addWorksheet('Dashboard', { views: [{ showGridLines: false }] });
+        [30, 26, 16, 16, 16].forEach((w, i) => wsD.getColumn(i + 1).width = w);
+        wsD.mergeCells('A1:E1'); const dt = wsD.getCell('A1'); dt.value = 'SALES DASHBOARD';
+        dt.font = { bold: true, size: 16, color: { argb: 'FFFFFFFF' }, name: 'Calibri' }; dt.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEAD } }; dt.alignment = { horizontal: 'left', vertical: 'middle' }; wsD.getRow(1).height = 28;
+        const totInc = sum(data, 'assetIncome'), totSales = sum(data, 'amount'), totTax = sum(data, 'taxable');
+        const kpiPairs = [['Total Sales (Assetwise)', totInc], ['Total Revenue', totSales], ['Net Taxable Sales', totTax], ['Total GST', totSales - totTax], ['Orders', distinct(data, 'invoice')], ['Assets', distinct(data, 'assetCode')], ['Customers', distinct(data, 'customer')], ['Working Months', distinct(data, 'wmLabel')]];
+        let r = 3;
+        kpiPairs.forEach((p, i) => { const lc = wsD.getCell(r, 1), vc = wsD.getCell(r, 2); lc.value = p[0]; vc.value = p[1]; lc.font = { bold: true, name: 'Calibri', size: 10.5, color: { argb: 'FF5A6B80' } }; vc.font = { bold: true, name: 'Calibri', size: 12, color: { argb: 'FF163A5C' } }; if (i < 4) vc.numFmt = NUM; lc.fill = vc.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEEF4FB' } }; lc.border = vc.border = box(thin); r++; });
+        r++;
+        const secTitle = (txt) => { wsD.mergeCells(r, 1, r, 3); const c = wsD.getCell(r, 1); c.value = txt; c.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11, name: 'Calibri' }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: TITLEBG } }; c.alignment = { horizontal: 'left', vertical: 'middle' }; wsD.getRow(r).height = 20; r++; };
+        const tableHdr = (cols) => { cols.forEach((t, i) => { const c = wsD.getCell(r, i + 1); c.value = t; }); styleHeadRow(wsD, r, cols.length); r++; };
+        const writeShare = (rows2, grand) => { const d0 = r; rows2.forEach(([nm, val]) => { wsD.getCell(r, 1).value = nm; wsD.getCell(r, 2).value = val; wsD.getCell(r, 3).value = grand ? val / grand : 0; for (let c = 1; c <= 3; c++) { const x = wsD.getCell(r, c); x.border = box(thin); x.font = { name: 'Calibri', size: 10.5 }; if (c === 2) { x.numFmt = NUM; x.alignment = { horizontal: 'right' }; } else if (c === 3) { x.numFmt = '0.00%'; x.alignment = { horizontal: 'right' }; } else x.alignment = { horizontal: 'left' }; if ((r - d0) % 2 === 1) x.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GREY } }; } r++; }); r++; };
+        const assetInc = {}; data.forEach(x => { const k = x.assetCode || '(blank)'; assetInc[k] = (assetInc[k] || 0) + (+x.assetIncome || 0); });
+        secTitle('SALES BY LINE OF BUSINESS'); tableHdr(['Line of Business', 'Assetwise Income', '% Share']); writeShare(topGroup(data, 'lob', 'assetIncome'), totInc);
+        secTitle('MONTHLY SALES TREND'); tableHdr(['Month', 'Assetwise Income', '% Share']); writeShare(monthOrder.map(k => [monthLabelOf(k), data.filter(x => x.monthKey === k).reduce((s, x) => s + x.assetIncome, 0)]), totInc);
+        secTitle('TOP 10 CUSTOMERS'); tableHdr(['Customer', 'Assetwise Income', '% Share']); writeShare(topGroup(data, 'customer', 'assetIncome', 10), totInc);
+        secTitle('TOP 10 ASSETS'); tableHdr(['Asset (Equip Code)', 'Assetwise Income', '% Share']); writeShare(Object.entries(assetInc).sort((a, b) => b[1] - a[1]).slice(0, 10), totInc);
+        secTitle('TOP EQUIPMENT TYPES'); tableHdr(['Equipment Type', 'Assetwise Income', '% Share']); writeShare(topGroup(data, 'equipType', 'assetIncome', 12), totInc);
+
+        /* ---- Sheet 3: R1 (Sum of GST_TXABL) ---- */
+        const wsR1 = wb.addWorksheet('R1', { views: [{ showGridLines: false }] });
+        [34, 16, 16, 16, 16, 16].forEach((w, i) => wsR1.getColumn(i + 1).width = w);
+        const pv1 = pivotRC('monthLbl', 'taxable'); const monthEntries = monthOrder.map(k => [MONF[k % 12] + (new Set(data.map(x => x.year)).size > 1 ? '-' + Math.floor(k / 12) : ''), pv1[MONF[k % 12] + (new Set(data.map(x => x.year)).size > 1 ? '-' + Math.floor(k / 12) : '')] || pv1[MONF[k % 12]] || {}]);
+        let lr = writeMatrix(wsR1, 1, 'Sum of GST_TXABL  \u2014  by Billing Month \u00d7 Line of Business', 'Month', lobCols, monthEntries, NUM);
+        const pv2 = pivotRC('site', 'taxable'); const siteEntries = Object.keys(pv2).sort((a, b) => (a === '(blank)') - (b === '(blank)') || a.localeCompare(b)).map(s => [s, pv2[s]]);
+        lr = writeMatrix(wsR1, lr + 3, 'Sum of GST_TXABL  \u2014  by Site \u00d7 Line of Business', 'Site', lobCols, siteEntries, NUM);
+        const pv3 = pivotRC('wmLabel', 'taxable'); const wmEntries = Object.keys(pv3).sort((a, b) => (a === '(blank)') - (b === '(blank)') || a.localeCompare(b)).map(s => [s, pv3[s]]);
+        writeMatrix(wsR1, lr + 3, 'Sum of GST_TXABL  \u2014  by Working Month \u00d7 Line of Business', 'Working Month', lobCols, wmEntries, NUM);
+
+        /* ---- Sheet 4: R2 (Sum of ASSETWISE_INCOME by Fleet Type × Month) ---- */
+        const wsR2 = wb.addWorksheet('R2', { views: [{ showGridLines: false }] });
+        [30, 16, 16, 16, 16, 16].forEach((w, i) => wsR2.getColumn(i + 1).width = w);
+        const monLabels = monthOrder.map(monthLabelOf);
+        const pvA = {}; data.forEach(r2 => { const rk = r2.equipType || '(blank)'; const ck = r2.monthKey >= 0 ? monthLabelOf(r2.monthKey) : '(blank)'; (pvA[rk] = pvA[rk] || {})[ck] = (pvA[rk][ck] || 0) + (+r2.assetIncome || 0); });
+        const ftEntries = Object.keys(pvA).sort((a, b) => (a === '(blank)') - (b === '(blank)') || a.localeCompare(b)).map(s => [s, pvA[s]]);
+        writeMatrix(wsR2, 1, 'Sum of ASSETWISE_INCOME  \u2014  by Fleet Type \u00d7 Month', 'Fleet Type', monLabels, ftEntries, NUM);
+
+        const buf = await wb.xlsx.writeBuffer();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+        a.download = fileName; a.click();
+      }
+
+      return {
+        meta: {
+          name: 'Sales Dashboard', tagline: 'Sales analytics \u2014 value by customer, item, region & month',
+          icon: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg>'
+        },
+        hint: 'Upload the ERP <b>sales dump</b> (workbook with a <b>Master</b> sheet: Document No, Party Name, Item Code, GST_TXABL, TOTAL_AMOUNT, LOB_DESC, SITE_NAME, EQUIPMENTTYPE\u2026). Filter by customer / site / region / month and search by invoice or item \u2014 KPIs &amp; charts update live in <b>\u20b9 Cr</b>. The Excel export gives <b>Master Data + Dashboard + R1 + R2</b>.',
+        sheetName: 'Sales', exportName: 'VisionInfra-Sales-Dashboard',
+        process, kpis, charts, columns, tableColumns, filters, searchKeys: ['invoice', 'customer', 'itemCode', 'itemDesc', 'site', 'assetCode'], exportExcel
       };
     })();
 
