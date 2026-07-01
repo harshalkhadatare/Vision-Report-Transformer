@@ -2114,7 +2114,7 @@
   <!-- ===================== ADMIN DASHBOARD OVERLAY ===================== -->
   <div id="adminView" class="overlay" style="display:none">
     <div class="ov-card ov-wide">
-      <div class="ov-head"><b>🛡 Admin Dashboard</b><button class="ov-x" id="admClose">✕</button></div>
+      <div class="ov-head"><b>Admin Dashboard</b><button class="ov-x" id="admClose">✕</button></div>
       <div class="adm-tabs">
         <button class="adm-tab active" data-tab="kpi">Overview</button>
         <button class="adm-tab" data-tab="users">Users</button>
@@ -3096,7 +3096,7 @@
       const ed = document.getElementById('rightsEditor');
       ed.innerHTML = `
         <div class="rr-head">
-          <button class="btn btn-line rr-back" onclick="closeRights()">← Back to list</button>
+          <button class="btn btn-line rr-back" onclick="closeRights()">← Back</button>
           <div><div class="rr-who">${esc(u.name)} <span>(${esc(u.user_id)})</span></div>
             <div class="rr-sub">${isAdmin ? 'Administrator — full access to all modules' : 'Select the report modules this user can access'}</div></div>
         </div>
