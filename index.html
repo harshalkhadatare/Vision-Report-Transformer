@@ -4783,7 +4783,7 @@
           calState[f.key] = new Set();
           return `<div class="field"><label>${f.label}</label>
         <div class="cal" data-fk="${f.key}" data-from="${f.from || f.key}" data-to="${f.to || ''}">
-          <button type="button" class="cal-btn" id="calbtn-${f.key}">📅 Select dates</button>
+          <button type="button" class="cal-btn" id="calbtn-${f.key}">Select dates</button>
           <div class="cal-panel"></div>
         </div></div>`;
         }
@@ -4891,7 +4891,7 @@
     }
     function updateCalLabel(fk) {
       const n = calState[fk] ? calState[fk].size : 0;
-      const b = document.getElementById('calbtn-' + fk); if (b) b.textContent = n ? `📅 ${n} day${n > 1 ? 's' : ''} selected` : '📅 Select dates';
+      const b = document.getElementById('calbtn-' + fk); if (b) b.textContent = n ? ` ${n} day${n > 1 ? 's' : ''} selected` : 'Select dates';
     }
     function updateMsLabel(fk) {
       const f = (PROC.filters || []).find(x => x.key === fk); const n = msState[fk].size;
