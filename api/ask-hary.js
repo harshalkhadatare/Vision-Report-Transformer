@@ -16,7 +16,9 @@
 //  No npm packages needed — uses the built-in fetch (Node 18+ on Vercel).
 // ============================================================================
 
-const GEMINI_MODEL = 'gemini-1.5-flash'; // fast + free; change to gemini-1.5-pro if you prefer
+// Current free models, tried in order (first that works wins). Override with the GEMINI_MODEL env var.
+const GEMINI_MODELS = (process.env.GEMINI_MODEL ? [process.env.GEMINI_MODEL] : [])
+  .concat(['gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.0-flash-001']);
 
 module.exports = async (req, res) => {
   if (req.method === 'OPTIONS') { res.status(204).end(); return; }
@@ -62,25 +64,29 @@ module.exports = async (req, res) => {
   const dataText = summary ? JSON.stringify(summary).slice(0, 28000) : '(no report is currently open)';
 
   try {
-    const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL + ':generateContent?key=' + encodeURIComponent(KEY);
-    const gr = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: system }] },
-        contents: [{ role: 'user', parts: [{ text: 'REPORT DATA (JSON):\n' + dataText + '\n\nQUESTION: ' + question }] }],
-        generationConfig: { temperature: 0.2, maxOutputTokens: 800 }
-      })
+    const reqBody = JSON.stringify({
+      systemInstruction: { parts: [{ text: system }] },
+      contents: [{ role: 'user', parts: [{ text: 'REPORT DATA (JSON):\n' + dataText + '\n\nQUESTION: ' + question }] }],
+      generationConfig: { temperature: 0.2, maxOutputTokens: 800 }
     });
 
-    if (!gr.ok) {
-      const errTxt = await gr.text();
-      const msg = gr.status === 429
-        ? 'AI is busy right now (free-tier rate limit). Please wait a few seconds and try again.'
-        : 'AI service error (' + gr.status + ').';
-      res.status(200).json({ ok: false, error: msg, detail: errTxt.slice(0, 300) });
-      return;
+    let gr = null, lastErr = '', usedModel = '';
+    for (const model of GEMINI_MODELS) {
+      const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent?key=' + encodeURIComponent(KEY);
+      const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: reqBody });
+      if (r.ok) { gr = r; usedModel = model; break; }
+      lastErr = (await r.text()).slice(0, 300);
+      // 404 = model name not available on this key/region → try the next model. Other errors → stop.
+      if (r.status !== 404) {
+        const msg = r.status === 429
+          ? 'AI is busy right now (free-tier rate limit). Please wait a few seconds and try again.'
+          : (r.status === 400 && /API key/i.test(lastErr) ? 'The GEMINI_KEY looks invalid. Check the key in Vercel settings.' : 'AI service error (' + r.status + ').');
+        res.status(200).json({ ok: false, error: msg, detail: lastErr });
+        return;
+      }
     }
+
+    if (!gr) { res.status(200).json({ ok: false, error: 'No supported Gemini model was available for this API key. Try setting GEMINI_MODEL in Vercel (e.g. gemini-2.0-flash).', detail: lastErr }); return; }
 
     const data = await gr.json();
     const answer =
@@ -89,7 +95,7 @@ module.exports = async (req, res) => {
         data.candidates[0].content.parts[0].text) || '';
 
     if (!answer) { res.status(200).json({ ok: false, error: 'AI returned an empty answer. Try rephrasing.' }); return; }
-    res.status(200).json({ ok: true, answer: answer.trim() });
+    res.status(200).json({ ok: true, answer: answer.trim(), model: usedModel });
   } catch (e) {
     res.status(200).json({ ok: false, error: 'Could not reach the AI service. Check the server key and try again.' });
   }
