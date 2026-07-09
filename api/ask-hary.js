@@ -16,9 +16,10 @@
 //  No npm packages needed — uses the built-in fetch (Node 18+ on Vercel).
 // ============================================================================
 
-// Current free models, tried in order (first that works wins). Override with the GEMINI_MODEL env var.
+// Current free models, tried in order (first that WORKS wins). Override with the GEMINI_MODEL env var.
+// Ordered to prefer models that typically have real free-tier quota.
 const GEMINI_MODELS = (process.env.GEMINI_MODEL ? [process.env.GEMINI_MODEL] : [])
-  .concat(['gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.0-flash-001']);
+  .concat(['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.0-flash', 'gemini-1.5-flash-latest', 'gemini-1.5-flash-8b-latest']);
 
 module.exports = async (req, res) => {
   if (req.method === 'OPTIONS') { res.status(204).end(); return; }
@@ -70,23 +71,28 @@ module.exports = async (req, res) => {
       generationConfig: { temperature: 0.2, maxOutputTokens: 800 }
     });
 
-    let gr = null, lastErr = '', usedModel = '';
+    let gr = null, lastErr = '', usedModel = '', saw429 = false;
     for (const model of GEMINI_MODELS) {
       const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent?key=' + encodeURIComponent(KEY);
       const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: reqBody });
       if (r.ok) { gr = r; usedModel = model; break; }
-      lastErr = (await r.text()).slice(0, 300);
-      // 404 = model name not available on this key/region → try the next model. Other errors → stop.
-      if (r.status !== 404) {
-        const msg = r.status === 429
-          ? 'AI is busy right now (free-tier rate limit). Please wait a few seconds and try again.'
-          : (r.status === 400 && /API key/i.test(lastErr) ? 'The GEMINI_KEY looks invalid. Check the key in Vercel settings.' : 'AI service error (' + r.status + ').');
-        res.status(200).json({ ok: false, error: msg, detail: lastErr });
-        return;
-      }
+      lastErr = (await r.text()).slice(0, 400);
+      // 404 (model not available) or 429 (this model's quota used up) → try the next model.
+      if (r.status === 404) continue;
+      if (r.status === 429) { saw429 = true; continue; }
+      // any other error (bad key, blocked, etc.) → stop and report it.
+      const msg = (r.status === 400 && /API key/i.test(lastErr)) ? 'The GEMINI_KEY looks invalid. Check the key in Vercel settings.' : 'AI service error (' + r.status + ').';
+      res.status(200).json({ ok: false, error: msg, detail: lastErr });
+      return;
     }
 
-    if (!gr) { res.status(200).json({ ok: false, error: 'No supported Gemini model was available for this API key. Try setting GEMINI_MODEL in Vercel (e.g. gemini-2.0-flash).', detail: lastErr }); return; }
+    if (!gr) {
+      const msg = saw429
+        ? 'Your Google AI free quota is used up for now. It resets daily (around 12:30 PM IST). Tip: set GEMINI_MODEL=gemini-2.5-flash in Vercel, or enable free-tier billing in Google AI Studio for higher limits.'
+        : 'No supported Gemini model was available for this API key. Try setting GEMINI_MODEL in Vercel (e.g. gemini-2.5-flash).';
+      res.status(200).json({ ok: false, error: msg, detail: lastErr });
+      return;
+    }
 
     const data = await gr.json();
     const answer =
