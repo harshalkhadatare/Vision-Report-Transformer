@@ -3498,7 +3498,7 @@
         key: c.key, label: c.label,
         fmt: c.type === 'sr' ? 'sr' : c.type === 'date' ? 'date' : c.type === 'num2' ? 'num2' : c.type === 'int' ? 'int' : 'text'
       }));
-      const filters = [{ key: 'day', label: 'Day-wise (calendar)', type: 'calendar', from: 'start', to: 'close' }, { key: 'month', label: 'Month / Year', sort: 'month' }, { key: 'dept', label: 'Department', multi: true }, { key: 'client', label: 'Client' }];
+      const filters = [{ key: 'day', label: 'Day-wise (calendar)', type: 'calendar', from: 'start', to: 'close' }, { key: 'month', label: 'Month / Year', sort: 'month' }, { key: 'site', label: 'Site', multi: true }, { key: 'asset', label: 'Equipment', multi: true }, { key: 'dept', label: 'Department', multi: true }, { key: 'location', label: 'Location', multi: true }, { key: 'client', label: 'Client' }];
       return {
         meta: {
           name: 'P&M Rental Report', tagline: 'Daily equipment logsheet → utilisation & deployment summary → Upload ERP dump as it is.',
@@ -4822,8 +4822,10 @@
         }
         return `<div class="field"><label>${f.label}</label><select data-fk="${f.key}"><option value="">All</option>${filterOptions(f).map(v => `<option>${v}</option>`).join('')}</select></div>`;
       }).join('') + (PROC.searchKeys ? `<div class="field grow"><label>Search</label><input type="search" id="fSearch" placeholder="PO / GRN / Bill no, vendor, anything…"></div>` : '')
+        + `<div class="field" style="align-self:flex-end"><label>&nbsp;</label><button type="button" class="btn btn-line" id="btnClearFilters" title="Clear all applied filters">↺ Reset filters</button></div>`
         + `<span class="pill" id="rowCount"></span>`;
       host.querySelectorAll('select[data-fk]').forEach(s => s.onchange = applyFilters);
+      const _cf = document.getElementById('btnClearFilters'); if (_cf) _cf.onclick = resetAllFilters;
       host.querySelectorAll('input[data-rg],input[data-dr]').forEach(inp => inp.oninput = applyFilters);
       host.querySelectorAll('.ms-search').forEach(si => si.oninput = e => {
         e.stopPropagation(); const q = norm(si.value);
@@ -4912,6 +4914,17 @@
     }
     document.addEventListener('click', () => document.querySelectorAll('.ms.open').forEach(x => x.classList.remove('open')));
 
+    function resetAllFilters() {
+      const host = document.getElementById('filters'); if (!host) return;
+      host.querySelectorAll('select[data-fk]').forEach(s => s.value = '');
+      host.querySelectorAll('input[data-rg],input[data-dr]').forEach(i => i.value = '');
+      for (const k in msState) { msState[k].clear(); }
+      host.querySelectorAll('.ms').forEach(ms => { ms.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false); const fk = ms.dataset.fk; if (fk && msState[fk]) updateMsLabel(fk); });
+      for (const k in calState) { if (calState[k]) calState[k].clear(); }
+      host.querySelectorAll('.cal').forEach(cal => { const fk = cal.dataset.fk; if (calState[fk]) { renderCalendar(cal); updateCalLabel(fk); } });
+      const se = document.getElementById('fSearch'); if (se) se.value = '';
+      tableLimit = 200; applyFilters();
+    }
     function applyFilters() {
       tableLimit = 200;
       const sels = [...document.querySelectorAll('#filters select[data-fk]')].map(s => [s.dataset.fk, s.value]);
