@@ -3400,7 +3400,7 @@
         asset: ['equipmentnumber', 'equipment', 'assetcode'], date: ['date'], party: ['partyname', 'clientname'],
         site: ['sitecode'], location: ['sitelocation', 'location'], make: ['make'], model: ['model'],
         fleet: ['fleettype', 'department'], hrs: ['runninghrs', 'workedhours'], status: ['status'],
-        diesel: ['dieselqty', 'dieselquantity', 'diesel', 'dieselconsumed', 'dieselconsumption', 'dieselltr', 'dieselinltr', 'hsdqty', 'hsd', 'fuelqty', 'fuelconsumed', 'fuel']
+        diesel: ['hdsissueqty', 'hdsissuedqty', 'hdsissue', 'hsdissueqty', 'dieselissueqty', 'dieselissuedqty', 'dieselqty', 'dieselquantity']
       };
       const STATUS = [['working', 'Working', '#1d9e75'], ['idle', 'Idle', '#f59e0b'], ['bdwn', 'Breakdown', '#d8504c'], ['transit', 'In transit', '#2f6db0'], ['free', 'Free', '#8a98a4']];
       const STD = 260 / 30;
@@ -3445,7 +3445,7 @@
         const assets = new Set(view.map(x => x.asset)).size, wh = sum(view, 'worked'), wo = sum(view, 'woHour'), util = wo ? wh / wo : 0;
         return [['Equipment Count', fmtN(assets), `${fmtN(view.length)} deployments`, '#2f6db0'],
         ['Worked Hours', fmtN(wh, 2), 'total running hours', '#1d9e75'],
-        ['Diesel Qty', fmtN(sum(view, 'diesel'), 2), 'total diesel consumed', '#b45309'],
+        ['Diesel Qty', fmtN(sum(view, 'diesel'), 2), 'total issued diesel (HDS_ISSUE_QTY)', '#b45309'],
         ['Avg Utilisation', fmtPct(util), 'worked hrs ÷ available hrs', '#f59e0b'],
         ['Working Days', fmtN(sum(view, 'working')), 'days in working status', '#1d9e75'],
         ['Idle Days', fmtN(sum(view, 'idle')), 'days in idle status', '#f59e0b'],
@@ -5269,7 +5269,7 @@
       function empCard(e) { return `Here are the details I found \uD83D\uDC47\n**${e.name}**\n\u2022 **Employee ID:** ${e.id || '\u2014'}\n\u2022 **Designation:** ${e.desig || '\u2014'}\n\u2022 **Department:** ${e.dept || '\u2014'}`; }
       // Key people — shown with full details (like any employee) plus their contact info
       const KEYPEOPLE = {
-        harshal: { name: 'Mr. Harshal Ganapati Khadatare', id: '21686', desig: 'Data Engineer', dept: 'IT', email: 'itsupport@visioninfraindia.com', phone: '+91 90757 68742', note: 'Developer of this Report Analyzer platform.' },
+        harshal: { name: 'Mr. Harshal Khadatare', id: '21686', desig: 'Data Engineer', dept: 'IT', email: 'itsupport@visioninfraindia.com', note: 'Developer of this Report Analyzer platform.' },
         sandeep: { name: 'Mr. Sandeep Patil', id: '\u2014', desig: 'Manager', dept: 'P&M / Audit', email: 'pnm_audit@visioninfraindia.com', phone: '+91 89566 67459', note: 'Manager \u2014 guides & supports the reporting platform.' }
       };
       function keyCard(k) {
