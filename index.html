@@ -4641,7 +4641,12 @@
         };
         const lobCols = [...new Set(data.map(r => r.lob || '(blank)'))].sort();
         const monthOrder = [...new Set(data.filter(r => r.monthKey >= 0).map(r => r.monthKey))].sort((a, b) => a - b);
-        const monthLabelOf = k => MONF[k % 12] + '-' + Math.floor(k / 12);
+        const monthLabelOf = k => MONF[k % 12] + '-' + String(Math.floor(k / 12)).slice(-2);
+        // EQP WISE and Client Wise always use full master data (RAW), not filtered VIEW
+        // so they match the reference which shows all data regardless of current filters
+        const allData = (typeof RAW !== 'undefined' && RAW && RAW.length) ? RAW : data;
+        const allMonthOrder = [...new Set(allData.filter(r => r.monthKey >= 0).map(r => r.monthKey))].sort((a, b) => a - b);
+        const allMonLabels = allMonthOrder.map(monthLabelOf);
 
         /* ---- Sheet 2: Dashboard ---- */
         const wsD = wb.addWorksheet('Dashboard', { views: [{ showGridLines: false }] });
@@ -4680,6 +4685,88 @@
         const pvA = {}; data.forEach(r2 => { const rk = r2.equipType || '(blank)'; const ck = r2.monthKey >= 0 ? monthLabelOf(r2.monthKey) : '(blank)'; (pvA[rk] = pvA[rk] || {})[ck] = (pvA[rk][ck] || 0) + (+r2.assetIncome || 0); });
         const ftEntries = Object.keys(pvA).sort((a, b) => (a === '(blank)') - (b === '(blank)') || a.localeCompare(b)).map(s => [s, pvA[s]]);
         writeMatrix(wsR2, 1, 'Sum of ASSETWISE_INCOME  \u2014  by Fleet Type \u00d7 Month', 'Fleet Type', monLabels, ftEntries, NUM);
+
+        /* ---- Sheet 5: EQP WISE (ASSETWISE_INCOME by Asset Code × Month, full RAW data) ---- */
+        const wsEQP = wb.addWorksheet('EQP WISE', { views: [{ state: 'frozen', ySplit: 1 }] });
+        [18, 26, 24].concat(allMonLabels.map(() => 16)).concat([16]).forEach((w, i) => wsEQP.getColumn(i + 1).width = w);
+        // pivot: asset code → { etype, make, month→total }
+        const eqpMap = {};
+        allData.forEach(row => {
+          const ec = row.assetCode || '(blank)', mk = row.monthKey >= 0 ? monthLabelOf(row.monthKey) : '';
+          if (ec === '(blank)') return; // skip rows with no real asset code
+          if (!eqpMap[ec]) eqpMap[ec] = { etype: row.equipType || '(blank)', make: row.make || '(blank)', months: {} };
+          if (mk) eqpMap[ec].months[mk] = (eqpMap[ec].months[mk] || 0) + (+row.assetIncome || 0);
+        });
+        const eqpKeys = Object.keys(eqpMap).sort((a, b) => a.localeCompare(b));
+        // header
+        const eqpHdr = ['Asset Code', 'Equipment Type', 'Make', ...allMonLabels, 'Grand Total'];
+        const eqpHdrRow = wsEQP.addRow(eqpHdr);
+        styleHeadRow(wsEQP, 1, eqpHdr.length);
+        wsEQP.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: eqpHdr.length } };
+        // data rows
+        const eqpMonTotals = {}; allMonLabels.forEach(m => eqpMonTotals[m] = 0); let eqpGrandTotal = 0;
+        eqpKeys.forEach((ec, ri) => {
+          const info = eqpMap[ec];
+          const rowVals = [ec, info.etype, info.make, ...allMonLabels.map(m => info.months[m] || null)];
+          const gt = allMonLabels.reduce((s, m) => s + (info.months[m] || 0), 0);
+          rowVals.push(gt); eqpGrandTotal += gt;
+          allMonLabels.forEach(m => eqpMonTotals[m] = (eqpMonTotals[m] || 0) + (info.months[m] || 0));
+          const dr = wsEQP.addRow(rowVals);
+          dr.eachCell({ includeEmpty: false }, (cell, cn) => {
+            cell.border = box(thin); cell.font = { name: 'Calibri', size: 10 };
+            if (cn > 3) { cell.numFmt = NUM; cell.alignment = { horizontal: 'right' }; }
+            if (ri % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GREY } };
+          });
+        });
+        // grand total row
+        const eqpGTRow = wsEQP.addRow(['Grand Total', null, null, ...allMonLabels.map(m => eqpMonTotals[m] || null), eqpGrandTotal]);
+        eqpGTRow.eachCell({ includeEmpty: false }, (cell, cn) => {
+          cell.font = { bold: true, name: 'Calibri', size: 10.5, color: { argb: 'FFFFFFFF' } };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: TITLEBG } };
+          cell.border = box(thin);
+          if (cn > 3) { cell.numFmt = NUM; cell.alignment = { horizontal: 'right' }; }
+        });
+
+        /* ---- Sheet 6: Client Wise (TAXABLE_VALUE by Customer × Month, full RAW data) ---- */
+        const wsCL = wb.addWorksheet('Client Wise', { views: [{ state: 'frozen', ySplit: 1 }] });
+        [40].concat(allMonLabels.map(() => 16)).concat([16]).forEach((w, i) => wsCL.getColumn(i + 1).width = w);
+        // pivot: customer → { month→total } using TAXABLE VALUE; group case-insensitively (keep first-seen display label)
+        const clMap = {}, clLabel = {};
+        allData.forEach(row => {
+          const rawCl = row.customer || '(blank)', clKey = rawCl.toUpperCase().trim();
+          if (!clLabel[clKey]) clLabel[clKey] = rawCl; // keep first-seen label for display
+          if (!clMap[clKey]) clMap[clKey] = {};
+          const mk = row.monthKey >= 0 ? monthLabelOf(row.monthKey) : '';
+          if (mk) clMap[clKey][mk] = (clMap[clKey][mk] || 0) + (+row.taxable || 0);
+        });
+        const clKeys = Object.keys(clMap).sort((a, b) => a.localeCompare(b));
+        // header
+        const clHdr = ['Customer', ...allMonLabels, 'Grand Total'];
+        wsCL.addRow(clHdr); styleHeadRow(wsCL, 1, clHdr.length);
+        wsCL.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: clHdr.length } };
+        // data rows
+        const clMonTotals = {}; allMonLabels.forEach(m => clMonTotals[m] = 0); let clGrandTotal = 0;
+        clKeys.forEach((cl, ri) => {
+          const months = clMap[cl], displayName = clLabel[cl] || cl;
+          const rowVals = [displayName, ...allMonLabels.map(m => months[m] || null)];
+          const gt = allMonLabels.reduce((s, m) => s + (months[m] || 0), 0);
+          rowVals.push(gt); clGrandTotal += gt;
+          allMonLabels.forEach(m => clMonTotals[m] = (clMonTotals[m] || 0) + (months[m] || 0));
+          const dr = wsCL.addRow(rowVals);
+          dr.eachCell({ includeEmpty: false }, (cell, cn) => {
+            cell.border = box(thin); cell.font = { name: 'Calibri', size: 10 };
+            if (cn > 1) { cell.numFmt = NUM; cell.alignment = { horizontal: 'right' }; }
+            if (ri % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GREY } };
+          });
+        });
+        // grand total row
+        const clGTRow = wsCL.addRow(['Grand Total', ...allMonLabels.map(m => clMonTotals[m] || null), clGrandTotal]);
+        clGTRow.eachCell({ includeEmpty: false }, (cell, cn) => {
+          cell.font = { bold: true, name: 'Calibri', size: 10.5, color: { argb: 'FFFFFFFF' } };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: TITLEBG } };
+          cell.border = box(thin);
+          if (cn > 1) { cell.numFmt = NUM; cell.alignment = { horizontal: 'right' }; }
+        });
 
         const buf = await wb.xlsx.writeBuffer();
         const a = document.createElement('a');
