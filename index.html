@@ -1415,6 +1415,13 @@
       color: #fff
     }
 
+    .auth-msg.warn {
+      display: block;
+      background: rgba(230, 162, 60, .95);
+      color: #fff;
+      font-weight: 600;
+    }
+
     /* ===== FOOTER (3D / layered) ===== */
     footer.site {
       position: relative;
@@ -2193,12 +2200,14 @@
   <div id="denyView" class="overlay" style="display:none">
     <div class="ov-card" style="max-width:440px">
       <div class="ov-head" style="background:linear-gradient(135deg,#b3261e,#7a1a15)"><b>⛔ Access Denied</b>
-        <button class="ov-x" onclick="closeDeny()">✕</button></div>
+        <button class="ov-x" onclick="closeDeny()">✕</button>
+      </div>
       <div style="padding:26px 24px;text-align:center">
         <div style="font-size:44px;line-height:1;margin-bottom:12px">🔒</div>
         <h3 style="margin:0 0 8px;color:#7a1a15">You do not have permission to access this report.</h3>
         <p style="color:#5a6b80;font-size:13.5px;line-height:1.6;margin:0 0 18px">
-          Access to <b id="denyName">this report</b> is restricted. Please contact your administrator to request access.</p>
+          Access to <b id="denyName">this report</b> is restricted. Please contact your administrator to request access.
+        </p>
         <button class="btn btn-line" onclick="closeDeny()">Back to reports</button>
       </div>
     </div>
@@ -2242,7 +2251,9 @@
     <div class="hary-head">
       <div class="hary-ava">H<i class="hary-on"></i></div>
       <div class="hary-id"><b>Hary</b><span id="haryStatus">AI Assistant · Online</span></div>
-      <label class="hary-ai-sw" title="AI mode: answer using your live report data (needs Vercel + API key)"><input type="checkbox" id="haryAiToggle"><span class="hary-ai-track"><span class="hary-ai-dot"></span></span><b>AI</b></label>
+      <label class="hary-ai-sw" title="AI mode: answer using your live report data (needs Vercel + API key)"><input
+          type="checkbox" id="haryAiToggle"><span class="hary-ai-track"><span
+            class="hary-ai-dot"></span></span><b>AI</b></label>
       <button id="haryClear" class="hary-hbtn" title="Start a new chat">⟲</button>
       <button id="haryClose" class="hary-hbtn" title="Close">✕</button>
     </div>
@@ -3225,9 +3236,82 @@
 
     /* ===================== SUPABASE + AUTH ===================== */
     const SB = (window.supabase && /^https:\/\//.test(SUPABASE_URL)) ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON) : null;
-    const SESSION_KEY = 'vi_user'; let USER = null;
-    function getSession() { try { return JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch (e) { return null; } }
-    function setSession(u) { USER = u; if (u) localStorage.setItem(SESSION_KEY, JSON.stringify(u)); else localStorage.removeItem(SESSION_KEY); }
+    const SESSION_KEY = 'vi_user';
+    const SESSION_TTL = 60 * 60 * 1000;          // 1 hour in ms
+    const SESSION_CHECK_INTERVAL = 60 * 1000;     // check every 60 seconds
+    const SESSION_ACTIVITY_KEY = 'vi_last_act';   // last-activity timestamp (separate key)
+    let USER = null, _sessionTimer = null;
+
+    /* ---- helpers ---- */
+    function _now() { return Date.now(); }
+    function _getLastActivity() { return parseInt(localStorage.getItem(SESSION_ACTIVITY_KEY) || '0', 10); }
+    function _touchActivity() { localStorage.setItem(SESSION_ACTIVITY_KEY, String(_now())); }
+    function _clearSession() {
+      localStorage.removeItem(SESSION_KEY);
+      localStorage.removeItem(SESSION_ACTIVITY_KEY);
+      USER = null;
+    }
+
+    function getSession() {
+      try { return JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch (e) { return null; }
+    }
+    function setSession(u) {
+      USER = u;
+      if (u) {
+        if (!u.loginAt) u.loginAt = _now();   // stamp login time once
+        localStorage.setItem(SESSION_KEY, JSON.stringify(u));
+        _touchActivity();                       // mark activity on every save
+      } else {
+        _clearSession();
+      }
+    }
+
+    /* ---- session validity check ---- */
+    function _sessionValid() {
+      const s = getSession();
+      if (!s || !s.token) return false;
+      const lastAct = _getLastActivity();
+      if (!lastAct) return false;              // no activity stamp → force re-login
+      return (_now() - lastAct) < SESSION_TTL;
+    }
+
+    /* ---- forced expiry (called by timer or on page load) ---- */
+    function _expireSession(showMsg) {
+      _stopSessionTimer();
+      const wasLoggedIn = !!USER;
+      _clearSession();
+      reset();
+      if (typeof Hary !== 'undefined') Hary.reset();
+      document.getElementById('selectView').style.display = 'block';
+      document.getElementById('uploadView').style.display = 'none';
+      document.getElementById('dashView').style.display = 'none';
+      const av = document.getElementById('adminView'); if (av) av.style.display = 'none';
+      CURRENT = null; PROC = null;
+      showAuth();
+      document.getElementById('liPass').value = '';
+      if (wasLoggedIn && showMsg) {
+        setTimeout(() => authMsg('Your session has expired. Please log in again.', 'warn'), 80);
+      }
+    }
+
+    /* ---- periodic session watchdog ---- */
+    function _startSessionTimer() {
+      _stopSessionTimer();
+      _sessionTimer = setInterval(() => {
+        if (USER && !_sessionValid()) _expireSession(true);
+      }, SESSION_CHECK_INTERVAL);
+    }
+    function _stopSessionTimer() {
+      if (_sessionTimer) { clearInterval(_sessionTimer); _sessionTimer = null; }
+    }
+
+    /* ---- activity listeners (sliding window) ---- */
+    function _initActivityTracking() {
+      const bump = () => { if (USER) _touchActivity(); };
+      ['click', 'keydown', 'mousemove', 'touchstart', 'scroll'].forEach(ev =>
+        document.addEventListener(ev, bump, { passive: true, capture: true })
+      );
+    }
     function authMsg(t, cls) { const e = document.getElementById('authMsg'); e.textContent = t || ''; e.className = 'auth-msg' + (t ? (' ' + cls) : ''); }
     function showAuth() { document.getElementById('authView').style.display = 'grid'; document.getElementById('appRoot').style.display = 'none'; }
     function showApp() {
@@ -3273,10 +3357,15 @@
       const b = document.getElementById('liBtn'); b.disabled = true; b.textContent = 'Signing in…';
       try {
         const { data, error } = await SB.rpc('login_user', { p_user_id: uid, p_password: pass }); if (error) throw error;
-        if (!data.ok) authMsg(data.error, 'err'); else { setSession({ name: data.name, user_id: data.user_id, token: data.token, role: data.role, dept: data.dept, reports: data.report_access }); showApp(); }
+        if (!data.ok) authMsg(data.error, 'err'); else {
+          setSession({ name: data.name, user_id: data.user_id, token: data.token, role: data.role, dept: data.dept, reports: data.report_access });
+          _startSessionTimer();
+          showApp();
+        }
       } catch (e) { authMsg('Could not log in: ' + (e.message || e), 'err'); } b.disabled = false; b.textContent = 'Login';
     }
     async function doLogout() {
+      _stopSessionTimer();
       try { if (SB && USER && USER.token) await SB.rpc('logout_user', { p_token: USER.token }); } catch (e) { }
       setSession(null); reset(); if (typeof Hary !== 'undefined') Hary.reset();
       document.getElementById('selectView').style.display = 'block';
@@ -3285,14 +3374,28 @@
       CURRENT = null; PROC = null; showAuth(); document.getElementById('liPass').value = '';
     }
     async function initAuth() {
+      _initActivityTracking();
       USER = getSession();
       if (USER && USER.token && SB) {
+        // Check client-side TTL first (fast path — avoids a network call if clearly expired)
+        if (!_sessionValid()) {
+          _clearSession();
+          showAuth();
+          authMsg('Your session has expired. Please log in again.', 'warn');
+          return;
+        }
         try {
           const { data } = await SB.rpc('whoami', { p_token: USER.token });
-          if (data && data.ok) { USER.name = data.name; USER.user_id = data.user_id; USER.role = data.role; USER.dept = data.dept; USER.reports = data.report_access; setSession(USER); showApp(); return; }
+          if (data && data.ok) {
+            USER.name = data.name; USER.user_id = data.user_id;
+            USER.role = data.role; USER.dept = data.dept; USER.reports = data.report_access;
+            setSession(USER);       // refreshes lastActivity
+            _startSessionTimer();
+            showApp(); return;
+          }
         } catch (e) { }
       }
-      setSession(null); showAuth();
+      _clearSession(); showAuth();
     }
 
     /* ---- file storage + history ---- */
@@ -3502,7 +3605,7 @@
       const filters = [{ key: 'day', label: 'Day-wise (calendar)', type: 'calendar', from: 'start', to: 'close' }, { key: 'month', label: 'Month / Year', sort: 'month' }, { key: 'site', label: 'Site', multi: true }, { key: 'asset', label: 'Equipment', multi: true }, { key: 'dept', label: 'Department', multi: true }, { key: 'location', label: 'Location', multi: true }, { key: 'client', label: 'Client' }];
       return {
         meta: {
-          name: 'P&M Rental Report', tagline: 'Daily equipment logsheet → utilisation & deployment summary → Upload ERP dump as it is → Dashboard. Note -  LogSheet Crusher, Milling not available yet.',
+          name: 'P&M Rental Report', tagline: 'Daily equipment logsheet → utilisation & deployment summary → Upload ERP dump as it is.',
           icon: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13l2-5h14l2 5"/><path d="M5 13h14v5H5z"/><circle cx="7.5" cy="18.5" r="1.5"/><circle cx="16.5" cy="18.5" r="1.5"/></svg>'
         },
         hint: 'Upload the raw daily logsheet (equipmentnumber, date, status, running_hrs) or a workbook with a <b>Master</b> sheet. Large legacy <b>.xls</b> read best if you Save As <b>.xlsx</b> first.',
@@ -4472,10 +4575,10 @@
           ['Net Taxable Sales', crore(sum(view, 'taxable')), 'ex-GST value', '#0891b2'],
           ['Total GST', crore(sum(view, 'gst')), 'CGST + SGST + IGST', '#e08a1e'],
           ['Total Orders', fmtN(orders), 'distinct invoices', '#163a5c'],
-          
+
           ['Total Assets', fmtN(distinct(view, 'assetCode')), 'distinct equipment', '#7c5cbf'],
           ['Active Customers', fmtN(distinct(view, 'customer')), 'billed parties', '#0a66c2'],
-          
+
           ['Sales Growth', growth == null ? '\u2014' : (growth >= 0 ? '+' : '') + fmtN(growth * 100, 1) + '%', 'latest vs prev month', growth == null ? '#8a98a4' : (growth >= 0 ? '#1d9e75' : '#d8504c')],
           ['Total Working Months', fmtN(distinct(view, 'wmLabel')), 'distinct working months', '#6f57c2'],
           ['Total Products', fmtN(distinct(view, 'itemCode')), 'distinct item codes', '#2f6db0']
@@ -4522,10 +4625,14 @@
             title: 'Quantity vs Sales Value', sub: 'monthly qty (bar) vs income (line)', height: 330, render(cv) {
               const qty = mk.map(k => view.filter(r => r.monthKey === k).reduce((s, r) => s + (+r.payQty || 0), 0));
               const val = mk.map(k => crN(monthSum(k, 'assetIncome')));
-              return new Chart(cv, { type: 'bar', data: { labels: mlab, datasets: [
-                { type: 'bar', label: 'Quantity', data: qty, backgroundColor: '#9ec6ef', borderRadius: 5, yAxisID: 'y' },
-                { type: 'line', label: 'Income (\u20b9 Cr)', data: val, borderColor: '#d8504c', backgroundColor: 'rgba(216,80,76,.15)', borderWidth: 3, tension: .35, pointRadius: 4, yAxisID: 'y1' }
-              ] }, options: opts({ plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 12, font: { size: 10 } } } }, scales: { y: { position: 'left', ticks: { callback: v => fmtN(v) } }, y1: { position: 'right', grid: { drawOnChartArea: false }, ticks: { callback: v => fmtN(v, 1) } } } }) });
+              return new Chart(cv, {
+                type: 'bar', data: {
+                  labels: mlab, datasets: [
+                    { type: 'bar', label: 'Quantity', data: qty, backgroundColor: '#9ec6ef', borderRadius: 5, yAxisID: 'y' },
+                    { type: 'line', label: 'Income (\u20b9 Cr)', data: val, borderColor: '#d8504c', backgroundColor: 'rgba(216,80,76,.15)', borderWidth: 3, tension: .35, pointRadius: 4, yAxisID: 'y1' }
+                  ]
+                }, options: opts({ plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 12, font: { size: 10 } } } }, scales: { y: { position: 'left', ticks: { callback: v => fmtN(v) } }, y1: { position: 'right', grid: { drawOnChartArea: false }, ticks: { callback: v => fmtN(v, 1) } } } })
+              });
             }
           },
           {
@@ -4565,14 +4672,14 @@
         { key: 'year', label: 'Year', multi: true, sort: 'year' },
         { key: 'assetCode', label: 'Asset (Equip Code)', multi: true },
         { key: 'assetDesc', label: 'Asset Description', multi: true },
-        
+
         { key: 'site', label: 'Location', multi: true },
         { key: 'state', label: 'Region / State', multi: true },
-        
-        
+
+
         { key: 'itemCode', label: 'Item Code', multi: true },
         { key: 'wmLabel', label: 'Working Month', multi: true, sort: 'month' },
-        
+
         { key: 'day', label: 'Date-wise (calendar)', type: 'calendar', from: 'invDate', to: 'invDate' },
         { key: 'invDate', label: 'Document Date range', type: 'daterange' }
       ];
@@ -4641,12 +4748,7 @@
         };
         const lobCols = [...new Set(data.map(r => r.lob || '(blank)'))].sort();
         const monthOrder = [...new Set(data.filter(r => r.monthKey >= 0).map(r => r.monthKey))].sort((a, b) => a - b);
-        const monthLabelOf = k => MONF[k % 12] + '-' + String(Math.floor(k / 12)).slice(-2);
-        // EQP WISE and Client Wise always use full master data (RAW), not filtered VIEW
-        // so they match the reference which shows all data regardless of current filters
-        const allData = (typeof RAW !== 'undefined' && RAW && RAW.length) ? RAW : data;
-        const allMonthOrder = [...new Set(allData.filter(r => r.monthKey >= 0).map(r => r.monthKey))].sort((a, b) => a - b);
-        const allMonLabels = allMonthOrder.map(monthLabelOf);
+        const monthLabelOf = k => MONF[k % 12] + '-' + Math.floor(k / 12);
 
         /* ---- Sheet 2: Dashboard ---- */
         const wsD = wb.addWorksheet('Dashboard', { views: [{ showGridLines: false }] });
@@ -4685,88 +4787,6 @@
         const pvA = {}; data.forEach(r2 => { const rk = r2.equipType || '(blank)'; const ck = r2.monthKey >= 0 ? monthLabelOf(r2.monthKey) : '(blank)'; (pvA[rk] = pvA[rk] || {})[ck] = (pvA[rk][ck] || 0) + (+r2.assetIncome || 0); });
         const ftEntries = Object.keys(pvA).sort((a, b) => (a === '(blank)') - (b === '(blank)') || a.localeCompare(b)).map(s => [s, pvA[s]]);
         writeMatrix(wsR2, 1, 'Sum of ASSETWISE_INCOME  \u2014  by Fleet Type \u00d7 Month', 'Fleet Type', monLabels, ftEntries, NUM);
-
-        /* ---- Sheet 5: EQP WISE (ASSETWISE_INCOME by Asset Code × Month, full RAW data) ---- */
-        const wsEQP = wb.addWorksheet('EQP WISE', { views: [{ state: 'frozen', ySplit: 1 }] });
-        [18, 26, 24].concat(allMonLabels.map(() => 16)).concat([16]).forEach((w, i) => wsEQP.getColumn(i + 1).width = w);
-        // pivot: asset code → { etype, make, month→total }
-        const eqpMap = {};
-        allData.forEach(row => {
-          const ec = row.assetCode || '(blank)', mk = row.monthKey >= 0 ? monthLabelOf(row.monthKey) : '';
-          if (ec === '(blank)') return; // skip rows with no real asset code
-          if (!eqpMap[ec]) eqpMap[ec] = { etype: row.equipType || '(blank)', make: row.make || '(blank)', months: {} };
-          if (mk) eqpMap[ec].months[mk] = (eqpMap[ec].months[mk] || 0) + (+row.assetIncome || 0);
-        });
-        const eqpKeys = Object.keys(eqpMap).sort((a, b) => a.localeCompare(b));
-        // header
-        const eqpHdr = ['Asset Code', 'Equipment Type', 'Make', ...allMonLabels, 'Grand Total'];
-        const eqpHdrRow = wsEQP.addRow(eqpHdr);
-        styleHeadRow(wsEQP, 1, eqpHdr.length);
-        wsEQP.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: eqpHdr.length } };
-        // data rows
-        const eqpMonTotals = {}; allMonLabels.forEach(m => eqpMonTotals[m] = 0); let eqpGrandTotal = 0;
-        eqpKeys.forEach((ec, ri) => {
-          const info = eqpMap[ec];
-          const rowVals = [ec, info.etype, info.make, ...allMonLabels.map(m => info.months[m] || null)];
-          const gt = allMonLabels.reduce((s, m) => s + (info.months[m] || 0), 0);
-          rowVals.push(gt); eqpGrandTotal += gt;
-          allMonLabels.forEach(m => eqpMonTotals[m] = (eqpMonTotals[m] || 0) + (info.months[m] || 0));
-          const dr = wsEQP.addRow(rowVals);
-          dr.eachCell({ includeEmpty: false }, (cell, cn) => {
-            cell.border = box(thin); cell.font = { name: 'Calibri', size: 10 };
-            if (cn > 3) { cell.numFmt = NUM; cell.alignment = { horizontal: 'right' }; }
-            if (ri % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GREY } };
-          });
-        });
-        // grand total row
-        const eqpGTRow = wsEQP.addRow(['Grand Total', null, null, ...allMonLabels.map(m => eqpMonTotals[m] || null), eqpGrandTotal]);
-        eqpGTRow.eachCell({ includeEmpty: false }, (cell, cn) => {
-          cell.font = { bold: true, name: 'Calibri', size: 10.5, color: { argb: 'FFFFFFFF' } };
-          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: TITLEBG } };
-          cell.border = box(thin);
-          if (cn > 3) { cell.numFmt = NUM; cell.alignment = { horizontal: 'right' }; }
-        });
-
-        /* ---- Sheet 6: Client Wise (TAXABLE_VALUE by Customer × Month, full RAW data) ---- */
-        const wsCL = wb.addWorksheet('Client Wise', { views: [{ state: 'frozen', ySplit: 1 }] });
-        [40].concat(allMonLabels.map(() => 16)).concat([16]).forEach((w, i) => wsCL.getColumn(i + 1).width = w);
-        // pivot: customer → { month→total } using TAXABLE VALUE; group case-insensitively (keep first-seen display label)
-        const clMap = {}, clLabel = {};
-        allData.forEach(row => {
-          const rawCl = row.customer || '(blank)', clKey = rawCl.toUpperCase().trim();
-          if (!clLabel[clKey]) clLabel[clKey] = rawCl; // keep first-seen label for display
-          if (!clMap[clKey]) clMap[clKey] = {};
-          const mk = row.monthKey >= 0 ? monthLabelOf(row.monthKey) : '';
-          if (mk) clMap[clKey][mk] = (clMap[clKey][mk] || 0) + (+row.taxable || 0);
-        });
-        const clKeys = Object.keys(clMap).sort((a, b) => a.localeCompare(b));
-        // header
-        const clHdr = ['Customer', ...allMonLabels, 'Grand Total'];
-        wsCL.addRow(clHdr); styleHeadRow(wsCL, 1, clHdr.length);
-        wsCL.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: clHdr.length } };
-        // data rows
-        const clMonTotals = {}; allMonLabels.forEach(m => clMonTotals[m] = 0); let clGrandTotal = 0;
-        clKeys.forEach((cl, ri) => {
-          const months = clMap[cl], displayName = clLabel[cl] || cl;
-          const rowVals = [displayName, ...allMonLabels.map(m => months[m] || null)];
-          const gt = allMonLabels.reduce((s, m) => s + (months[m] || 0), 0);
-          rowVals.push(gt); clGrandTotal += gt;
-          allMonLabels.forEach(m => clMonTotals[m] = (clMonTotals[m] || 0) + (months[m] || 0));
-          const dr = wsCL.addRow(rowVals);
-          dr.eachCell({ includeEmpty: false }, (cell, cn) => {
-            cell.border = box(thin); cell.font = { name: 'Calibri', size: 10 };
-            if (cn > 1) { cell.numFmt = NUM; cell.alignment = { horizontal: 'right' }; }
-            if (ri % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GREY } };
-          });
-        });
-        // grand total row
-        const clGTRow = wsCL.addRow(['Grand Total', ...allMonLabels.map(m => clMonTotals[m] || null), clGrandTotal]);
-        clGTRow.eachCell({ includeEmpty: false }, (cell, cn) => {
-          cell.font = { bold: true, name: 'Calibri', size: 10.5, color: { argb: 'FFFFFFFF' } };
-          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: TITLEBG } };
-          cell.border = box(thin);
-          if (cn > 1) { cell.numFmt = NUM; cell.alignment = { horizontal: 'right' }; }
-        });
 
         const buf = await wb.xlsx.writeBuffer();
         const a = document.createElement('a');
@@ -4867,15 +4887,15 @@
 
     /* ----- filters (single + multi-select checkbox) ----- */
     /* Chronological ordering for Month/Year filter options (multi-year aware) + tiny debounce */
-    const MON_IDX = { jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11, january:0,february:1,march:2,april:3,june:5,july:6,august:7,september:8,october:9,november:10,december:11 };
-    function monthSortVal(label){ const t=String(label).toLowerCase(); const mm=t.match(/[a-z]+/); const yy=t.match(/\d{4}/); const mi=(mm&&MON_IDX[mm[0]]!=null)?MON_IDX[mm[0]]:99; const yr=yy?+yy[0]:0; return yr*100+mi; }
-    function filterOptions(f){
-      const opts=uniq(RAW,f.key);
-      if(f.sort==='month') return opts.slice().sort((a,b)=>{const ba=(a==='(blank)'),bb=(b==='(blank)'); if(ba||bb) return (ba?1:0)-(bb?1:0); return monthSortVal(a)-monthSortVal(b);});
-      if(f.sort==='year')  return opts.slice().sort((a,b)=>{const ba=(a==='(blank)'),bb=(b==='(blank)'); if(ba||bb) return (ba?1:0)-(bb?1:0); return (+a||0)-(+b||0);});
+    const MON_IDX = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11, january: 0, february: 1, march: 2, april: 3, june: 5, july: 6, august: 7, september: 8, october: 9, november: 10, december: 11 };
+    function monthSortVal(label) { const t = String(label).toLowerCase(); const mm = t.match(/[a-z]+/); const yy = t.match(/\d{4}/); const mi = (mm && MON_IDX[mm[0]] != null) ? MON_IDX[mm[0]] : 99; const yr = yy ? +yy[0] : 0; return yr * 100 + mi; }
+    function filterOptions(f) {
+      const opts = uniq(RAW, f.key);
+      if (f.sort === 'month') return opts.slice().sort((a, b) => { const ba = (a === '(blank)'), bb = (b === '(blank)'); if (ba || bb) return (ba ? 1 : 0) - (bb ? 1 : 0); return monthSortVal(a) - monthSortVal(b); });
+      if (f.sort === 'year') return opts.slice().sort((a, b) => { const ba = (a === '(blank)'), bb = (b === '(blank)'); if (ba || bb) return (ba ? 1 : 0) - (bb ? 1 : 0); return (+a || 0) - (+b || 0); });
       return opts;
     }
-    const debounce=(fn,ms=180)=>{let t;return function(){clearTimeout(t);t=setTimeout(fn,ms);};};
+    const debounce = (fn, ms = 180) => { let t; return function () { clearTimeout(t); t = setTimeout(fn, ms); }; };
     function buildFilters() {
       const host = document.getElementById('filters'); const fs = PROC.filters || [];
       calState = {};
@@ -5768,7 +5788,10 @@
     <source src="images/background.mp4" type="video/mp4">
   </video>
   <style>
-    html { background: #0e2a43 }
+    html {
+      background: #0e2a43
+    }
+
     /* video shows only on the login / register screen */
     #bgVideo {
       position: fixed;
@@ -5780,8 +5803,15 @@
       pointer-events: none;
       display: none;
     }
-    body.auth-active #bgVideo { display: block }
-    body.auth-active { background: transparent !important }
+
+    body.auth-active #bgVideo {
+      display: block
+    }
+
+    body.auth-active {
+      background: transparent !important
+    }
+
     /* LOGIN / REGISTER: translucent dark veil so the video shows behind the glass card */
     #authView {
       background: linear-gradient(135deg, rgba(11, 34, 54, .80), rgba(21, 66, 106, .60) 45%, rgba(47, 109, 176, .52) 120%) !important;
@@ -5910,49 +5940,83 @@
     }
 
     /* unique premium gradient per card (cycles for future modules) */
-    .rcard:nth-child(8n+1) { background: linear-gradient(145deg, #4f8ff7, #15307a) }
+    .rcard:nth-child(8n+1) {
+      background: linear-gradient(145deg, #4f8ff7, #15307a)
+    }
 
     /* Royal → Deep Blue */
-    .rcard:nth-child(8n+2) { background: linear-gradient(145deg, #fb923c, #dc2626) }
+    .rcard:nth-child(8n+2) {
+      background: linear-gradient(145deg, #fb923c, #dc2626)
+    }
 
     /* Orange → Red */
-    .rcard:nth-child(8n+3) { background: linear-gradient(145deg, #16c0a8, #0a8f5f) }
+    .rcard:nth-child(8n+3) {
+      background: linear-gradient(145deg, #16c0a8, #0a8f5f)
+    }
 
     /* Teal → Green */
-    .rcard:nth-child(8n+4) { background: linear-gradient(145deg, #8b5cf6, #4338ca) }
+    .rcard:nth-child(8n+4) {
+      background: linear-gradient(145deg, #8b5cf6, #4338ca)
+    }
 
     /* Purple → Indigo */
-    .rcard:nth-child(8n+5) { background: linear-gradient(145deg, #f472b6, #be123c) }
+    .rcard:nth-child(8n+5) {
+      background: linear-gradient(145deg, #f472b6, #be123c)
+    }
 
     /* Pink → Rose */
-    .rcard:nth-child(8n+6) { background: linear-gradient(145deg, #22d3ee, #0e7490) }
+    .rcard:nth-child(8n+6) {
+      background: linear-gradient(145deg, #22d3ee, #0e7490)
+    }
 
     /* Cyan → Blue */
-    .rcard:nth-child(8n+7) { background: linear-gradient(145deg, #fbbf24, #d97706) }
+    .rcard:nth-child(8n+7) {
+      background: linear-gradient(145deg, #fbbf24, #d97706)
+    }
 
     /* Amber → Orange */
-    .rcard:nth-child(8n+8) { background: linear-gradient(145deg, #64748b, #1e293b) }
+    .rcard:nth-child(8n+8) {
+      background: linear-gradient(145deg, #64748b, #1e293b)
+    }
 
     /* Slate → Charcoal */
 
     /* hover glow tinted to each card */
-    .rcard:nth-child(8n+1):hover { box-shadow: 0 26px 54px rgba(37, 99, 235, .45) }
+    .rcard:nth-child(8n+1):hover {
+      box-shadow: 0 26px 54px rgba(37, 99, 235, .45)
+    }
 
-    .rcard:nth-child(8n+2):hover { box-shadow: 0 26px 54px rgba(220, 38, 38, .42) }
+    .rcard:nth-child(8n+2):hover {
+      box-shadow: 0 26px 54px rgba(220, 38, 38, .42)
+    }
 
-    .rcard:nth-child(8n+3):hover { box-shadow: 0 26px 54px rgba(13, 148, 136, .42) }
+    .rcard:nth-child(8n+3):hover {
+      box-shadow: 0 26px 54px rgba(13, 148, 136, .42)
+    }
 
-    .rcard:nth-child(8n+4):hover { box-shadow: 0 26px 54px rgba(99, 72, 202, .45) }
+    .rcard:nth-child(8n+4):hover {
+      box-shadow: 0 26px 54px rgba(99, 72, 202, .45)
+    }
 
-    .rcard:nth-child(8n+5):hover { box-shadow: 0 26px 54px rgba(190, 18, 60, .42) }
+    .rcard:nth-child(8n+5):hover {
+      box-shadow: 0 26px 54px rgba(190, 18, 60, .42)
+    }
 
-    .rcard:nth-child(8n+6):hover { box-shadow: 0 26px 54px rgba(14, 116, 144, .42) }
+    .rcard:nth-child(8n+6):hover {
+      box-shadow: 0 26px 54px rgba(14, 116, 144, .42)
+    }
 
-    .rcard:nth-child(8n+7):hover { box-shadow: 0 26px 54px rgba(217, 119, 6, .42) }
+    .rcard:nth-child(8n+7):hover {
+      box-shadow: 0 26px 54px rgba(217, 119, 6, .42)
+    }
 
-    .rcard:nth-child(8n+8):hover { box-shadow: 0 26px 54px rgba(30, 41, 59, .42) }
+    .rcard:nth-child(8n+8):hover {
+      box-shadow: 0 26px 54px rgba(30, 41, 59, .42)
+    }
 
-    .rcard.soon { opacity: .72 }
+    .rcard.soon {
+      opacity: .72
+    }
 
     .rcard .tag {
       position: absolute;
@@ -5973,78 +6037,407 @@
 
     /* responsive: 2 per row on tablet, 1 per row on mobile */
     @media (max-width: 980px) {
-      .cards { grid-template-columns: repeat(2, 1fr); max-width: 720px }
+      .cards {
+        grid-template-columns: repeat(2, 1fr);
+        max-width: 720px
+      }
     }
 
     @media (max-width: 600px) {
-      .cards { grid-template-columns: 1fr; max-width: 440px }
+      .cards {
+        grid-template-columns: 1fr;
+        max-width: 440px
+      }
     }
   </style>
   <style>
     /* ===== Role Rights (RBAC) UI ===== */
-    .rr-count { font-weight: 700; font-size: 12px; color: #2150aa; background: #eaf1fb; padding: 3px 10px; border-radius: 20px; }
-    .rr-count.all { color: #0a7d54; background: #e6f7ef; }
-    .rr-head { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
-    .rr-back { flex: none; }
-    .rr-who { font-weight: 800; font-size: 15px; color: #163a5c; }
-    .rr-who span { font-weight: 500; color: #7a8aa0; font-size: 13px; }
-    .rr-sub { font-size: 12.5px; color: #7a8aa0; margin-top: 2px; }
-    .rr-adminnote { background: linear-gradient(135deg, #eef5ff, #f7fbff); border: 1px solid #d6e6fb; color: #274b73; border-radius: 12px; padding: 14px 16px; font-size: 13px; line-height: 1.5; }
-    .rr-toolbar { display: flex; gap: 10px; margin-bottom: 14px; }
-    .rr-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
-    .rr-item { display: flex; align-items: center; gap: 12px; padding: 13px 15px; border: 1.5px solid #e3ebf5; border-radius: 13px; cursor: pointer; background: #fff; transition: border-color .16s ease, box-shadow .16s ease, background .16s ease, transform .12s ease; }
-    .rr-item:hover { border-color: #b9d2f2; box-shadow: 0 6px 16px rgba(47, 109, 176, .1); transform: translateY(-1px); }
-    .rr-item:has(.rr-cb:checked) { border-color: #4f8ff7; background: linear-gradient(135deg, #f2f8ff, #eaf3ff); box-shadow: inset 0 0 0 1px rgba(79, 143, 247, .25); }
-    .rr-item:has(.rr-cb:disabled) { opacity: .7; cursor: not-allowed; }
-    .rr-cb { width: 19px; height: 19px; accent-color: #2f6db0; flex: none; cursor: pointer; }
-    .rr-ic { width: 34px; height: 34px; flex: none; display: grid; place-items: center; border-radius: 9px; background: linear-gradient(135deg, #4f8ff7, #15307a); }
-    .rr-ic svg { width: 18px; height: 18px; stroke: #fff; fill: none; }
-    .rr-name { font-weight: 650; font-size: 13.5px; color: #1f3a56; }
-    .rr-actions { display: flex; align-items: center; justify-content: flex-end; gap: 14px; margin-top: 20px; padding-top: 16px; border-top: 1px solid #eef2f7; }
-    .rr-savemsg { font-size: 13px; font-weight: 600; }
-    .rr-savemsg.ok { color: #0a7d54; }
-    .rr-savemsg.err { color: #c0392b; }
+    .rr-count {
+      font-weight: 700;
+      font-size: 12px;
+      color: #2150aa;
+      background: #eaf1fb;
+      padding: 3px 10px;
+      border-radius: 20px;
+    }
+
+    .rr-count.all {
+      color: #0a7d54;
+      background: #e6f7ef;
+    }
+
+    .rr-head {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+
+    .rr-back {
+      flex: none;
+    }
+
+    .rr-who {
+      font-weight: 800;
+      font-size: 15px;
+      color: #163a5c;
+    }
+
+    .rr-who span {
+      font-weight: 500;
+      color: #7a8aa0;
+      font-size: 13px;
+    }
+
+    .rr-sub {
+      font-size: 12.5px;
+      color: #7a8aa0;
+      margin-top: 2px;
+    }
+
+    .rr-adminnote {
+      background: linear-gradient(135deg, #eef5ff, #f7fbff);
+      border: 1px solid #d6e6fb;
+      color: #274b73;
+      border-radius: 12px;
+      padding: 14px 16px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .rr-toolbar {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .rr-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 12px;
+    }
+
+    .rr-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 13px 15px;
+      border: 1.5px solid #e3ebf5;
+      border-radius: 13px;
+      cursor: pointer;
+      background: #fff;
+      transition: border-color .16s ease, box-shadow .16s ease, background .16s ease, transform .12s ease;
+    }
+
+    .rr-item:hover {
+      border-color: #b9d2f2;
+      box-shadow: 0 6px 16px rgba(47, 109, 176, .1);
+      transform: translateY(-1px);
+    }
+
+    .rr-item:has(.rr-cb:checked) {
+      border-color: #4f8ff7;
+      background: linear-gradient(135deg, #f2f8ff, #eaf3ff);
+      box-shadow: inset 0 0 0 1px rgba(79, 143, 247, .25);
+    }
+
+    .rr-item:has(.rr-cb:disabled) {
+      opacity: .7;
+      cursor: not-allowed;
+    }
+
+    .rr-cb {
+      width: 19px;
+      height: 19px;
+      accent-color: #2f6db0;
+      flex: none;
+      cursor: pointer;
+    }
+
+    .rr-ic {
+      width: 34px;
+      height: 34px;
+      flex: none;
+      display: grid;
+      place-items: center;
+      border-radius: 9px;
+      background: linear-gradient(135deg, #4f8ff7, #15307a);
+    }
+
+    .rr-ic svg {
+      width: 18px;
+      height: 18px;
+      stroke: #fff;
+      fill: none;
+    }
+
+    .rr-name {
+      font-weight: 650;
+      font-size: 13.5px;
+      color: #1f3a56;
+    }
+
+    .rr-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 14px;
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid #eef2f7;
+    }
+
+    .rr-savemsg {
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .rr-savemsg.ok {
+      color: #0a7d54;
+    }
+
+    .rr-savemsg.err {
+      color: #c0392b;
+    }
 
     /* ===== No reports assigned ===== */
-    .no-reports { grid-column: 1 / -1; text-align: center; padding: 54px 24px; color: #5a6b80; background: linear-gradient(180deg, rgba(244, 248, 252, .7), rgba(255, 255, 255, .4)); border: 1.5px dashed #cfdcec; border-radius: 20px; }
-    .no-reports .nr-ic { font-size: 46px; margin-bottom: 12px; }
-    .no-reports h3 { margin: 0 0 6px; color: #163a5c; font-size: 18px; }
-    .no-reports p { margin: 0; font-size: 13.5px; line-height: 1.6; }
+    .no-reports {
+      grid-column: 1 / -1;
+      text-align: center;
+      padding: 54px 24px;
+      color: #5a6b80;
+      background: linear-gradient(180deg, rgba(244, 248, 252, .7), rgba(255, 255, 255, .4));
+      border: 1.5px dashed #cfdcec;
+      border-radius: 20px;
+    }
+
+    .no-reports .nr-ic {
+      font-size: 46px;
+      margin-bottom: 12px;
+    }
+
+    .no-reports h3 {
+      margin: 0 0 6px;
+      color: #163a5c;
+      font-size: 18px;
+    }
+
+    .no-reports p {
+      margin: 0;
+      font-size: 13.5px;
+      line-height: 1.6;
+    }
   </style>
   <style>
     /* ===== Day-wise calendar filter ===== */
-    .cal { position: relative; }
-    .cal-btn { width: 100%; text-align: left; padding: 9px 12px; border: 1px solid #d3ddea; border-radius: 10px; background: #fff; font: inherit; font-size: 13px; color: #1f3a56; cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease; }
-    .cal-btn:hover { border-color: #9dbde6; }
-    .cal.open .cal-btn { border-color: #4f8ff7; box-shadow: 0 0 0 3px rgba(79, 143, 247, .15); }
-    .cal-panel { position: absolute; z-index: 60; top: calc(100% + 6px); left: 0; width: 268px; background: #fff; border: 1px solid #e1e9f3; border-radius: 14px; box-shadow: 0 18px 44px rgba(20, 40, 70, .22); padding: 12px; display: none; }
-    .cal.open .cal-panel { display: block; }
-    .cal-hd { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-    .cal-hd b { font-size: 13.5px; color: #163a5c; }
-    .cal-nav { width: 28px; height: 28px; border: 1px solid #e1e9f3; background: #f6f9fc; border-radius: 8px; cursor: pointer; font-size: 15px; line-height: 1; color: #2f6db0; }
-    .cal-nav:hover { background: #eaf1fb; border-color: #b9d2f2; }
-    .cal-dow { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; margin-bottom: 4px; }
-    .cal-dow span { text-align: center; font-size: 10.5px; font-weight: 700; color: #9aa8bb; padding: 3px 0; }
-    .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
-    .cal-d { text-align: center; padding: 7px 0; font-size: 12.5px; border-radius: 8px; color: #cfd7e2; cursor: default; user-select: none; }
-    .cal-d[data-day] { color: #26364d; cursor: pointer; background: #eef4fb; font-weight: 600; }
-    .cal-d[data-day]:hover { background: #d8e7fb; }
-    .cal-d.sel { background: linear-gradient(135deg, #4f8ff7, #2150aa) !important; color: #fff !important; box-shadow: 0 4px 10px rgba(33, 80, 170, .35); }
-    .cal-d.off, .cal-d.empty { background: transparent; }
-    .cal-ft { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; padding-top: 9px; border-top: 1px solid #eef2f7; font-size: 11.5px; color: #7a8aa0; }
-    .cal-clear { border: none; background: #f3f5f9; color: #b3261e; font-weight: 600; font-size: 11.5px; padding: 4px 10px; border-radius: 7px; cursor: pointer; }
-    .cal-clear:hover { background: #fdeceb; }
+    .cal {
+      position: relative;
+    }
+
+    .cal-btn {
+      width: 100%;
+      text-align: left;
+      padding: 9px 12px;
+      border: 1px solid #d3ddea;
+      border-radius: 10px;
+      background: #fff;
+      font: inherit;
+      font-size: 13px;
+      color: #1f3a56;
+      cursor: pointer;
+      transition: border-color .15s ease, box-shadow .15s ease;
+    }
+
+    .cal-btn:hover {
+      border-color: #9dbde6;
+    }
+
+    .cal.open .cal-btn {
+      border-color: #4f8ff7;
+      box-shadow: 0 0 0 3px rgba(79, 143, 247, .15);
+    }
+
+    .cal-panel {
+      position: absolute;
+      z-index: 60;
+      top: calc(100% + 6px);
+      left: 0;
+      width: 268px;
+      background: #fff;
+      border: 1px solid #e1e9f3;
+      border-radius: 14px;
+      box-shadow: 0 18px 44px rgba(20, 40, 70, .22);
+      padding: 12px;
+      display: none;
+    }
+
+    .cal.open .cal-panel {
+      display: block;
+    }
+
+    .cal-hd {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .cal-hd b {
+      font-size: 13.5px;
+      color: #163a5c;
+    }
+
+    .cal-nav {
+      width: 28px;
+      height: 28px;
+      border: 1px solid #e1e9f3;
+      background: #f6f9fc;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 15px;
+      line-height: 1;
+      color: #2f6db0;
+    }
+
+    .cal-nav:hover {
+      background: #eaf1fb;
+      border-color: #b9d2f2;
+    }
+
+    .cal-dow {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 2px;
+      margin-bottom: 4px;
+    }
+
+    .cal-dow span {
+      text-align: center;
+      font-size: 10.5px;
+      font-weight: 700;
+      color: #9aa8bb;
+      padding: 3px 0;
+    }
+
+    .cal-grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 3px;
+    }
+
+    .cal-d {
+      text-align: center;
+      padding: 7px 0;
+      font-size: 12.5px;
+      border-radius: 8px;
+      color: #cfd7e2;
+      cursor: default;
+      user-select: none;
+    }
+
+    .cal-d[data-day] {
+      color: #26364d;
+      cursor: pointer;
+      background: #eef4fb;
+      font-weight: 600;
+    }
+
+    .cal-d[data-day]:hover {
+      background: #d8e7fb;
+    }
+
+    .cal-d.sel {
+      background: linear-gradient(135deg, #4f8ff7, #2150aa) !important;
+      color: #fff !important;
+      box-shadow: 0 4px 10px rgba(33, 80, 170, .35);
+    }
+
+    .cal-d.off,
+    .cal-d.empty {
+      background: transparent;
+    }
+
+    .cal-ft {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 10px;
+      padding-top: 9px;
+      border-top: 1px solid #eef2f7;
+      font-size: 11.5px;
+      color: #7a8aa0;
+    }
+
+    .cal-clear {
+      border: none;
+      background: #f3f5f9;
+      color: #b3261e;
+      font-weight: 600;
+      font-size: 11.5px;
+      padding: 4px 10px;
+      border-radius: 7px;
+      cursor: pointer;
+    }
+
+    .cal-clear:hover {
+      background: #fdeceb;
+    }
   </style>
   <style>
     /* ===== Hary AI-mode toggle ===== */
-    .hary-ai-sw { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; margin-left: auto; margin-right: 4px; }
-    .hary-ai-sw input { display: none; }
-    .hary-ai-sw b { font-size: 10.5px; font-weight: 800; letter-spacing: .04em; color: rgba(255, 255, 255, .78); }
-    .hary-ai-track { position: relative; width: 30px; height: 17px; border-radius: 20px; background: rgba(255, 255, 255, .28); transition: background .18s ease; }
-    .hary-ai-dot { position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: #fff; transition: transform .18s ease; box-shadow: 0 1px 3px rgba(0, 0, 0, .3); }
-    .hary-ai-sw input:checked + .hary-ai-track { background: #34d17a; }
-    .hary-ai-sw input:checked + .hary-ai-track .hary-ai-dot { transform: translateX(13px); }
-    .hary-ai-sw input:checked ~ b { color: #eafff3; }
+    .hary-ai-sw {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+      user-select: none;
+      margin-left: auto;
+      margin-right: 4px;
+    }
+
+    .hary-ai-sw input {
+      display: none;
+    }
+
+    .hary-ai-sw b {
+      font-size: 10.5px;
+      font-weight: 800;
+      letter-spacing: .04em;
+      color: rgba(255, 255, 255, .78);
+    }
+
+    .hary-ai-track {
+      position: relative;
+      width: 30px;
+      height: 17px;
+      border-radius: 20px;
+      background: rgba(255, 255, 255, .28);
+      transition: background .18s ease;
+    }
+
+    .hary-ai-dot {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 13px;
+      height: 13px;
+      border-radius: 50%;
+      background: #fff;
+      transition: transform .18s ease;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
+    }
+
+    .hary-ai-sw input:checked+.hary-ai-track {
+      background: #34d17a;
+    }
+
+    .hary-ai-sw input:checked+.hary-ai-track .hary-ai-dot {
+      transform: translateX(13px);
+    }
+
+    .hary-ai-sw input:checked~b {
+      color: #eafff3;
+    }
   </style>
 </body>
 
