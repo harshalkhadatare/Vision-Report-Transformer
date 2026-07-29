@@ -1415,6 +1415,13 @@
       color: #fff
     }
 
+    .auth-msg.warn {
+      display: block;
+      background: rgba(230, 162, 60, .95);
+      color: #fff;
+      font-weight: 600
+    }
+
     /* ===== FOOTER (3D / layered) ===== */
     footer.site {
       position: relative;
@@ -3225,9 +3232,52 @@
 
     /* ===================== SUPABASE + AUTH ===================== */
     const SB = (window.supabase && /^https:\/\//.test(SUPABASE_URL)) ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON) : null;
-    const SESSION_KEY = 'vi_user'; let USER = null;
+    /* ===================== SESSION MANAGEMENT (1-hour sliding timeout) ===================== */
+    const SESSION_KEY = 'vi_user';
+    const SESSION_ACT_KEY = 'vi_last_act';      // last-activity timestamp (sliding window)
+    const SESSION_TTL = 60 * 60 * 1000;         // 1 hour of inactivity
+    const SESSION_TICK = 30 * 1000;             // watchdog check every 30s
+    let USER = null, _sessTimer = null;
+
     function getSession() { try { return JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch (e) { return null; } }
-    function setSession(u) { USER = u; if (u) localStorage.setItem(SESSION_KEY, JSON.stringify(u)); else localStorage.removeItem(SESSION_KEY); }
+    function _touchActivity() { try { localStorage.setItem(SESSION_ACT_KEY, String(Date.now())); } catch (e) { } }
+    function _lastActivity() { return parseInt(localStorage.getItem(SESSION_ACT_KEY) || '0', 10); }
+    function _clearAuthData() { try { localStorage.removeItem(SESSION_KEY); localStorage.removeItem(SESSION_ACT_KEY); } catch (e) { } USER = null; }
+    function setSession(u) {
+      USER = u;
+      if (u) { if (!u.loginAt) u.loginAt = Date.now(); localStorage.setItem(SESSION_KEY, JSON.stringify(u)); _touchActivity(); }
+      else _clearAuthData();
+    }
+    // valid only while the user has been active within the last hour
+    function sessionValid() {
+      const s = getSession(); if (!s || !s.token) return false;
+      const la = _lastActivity(); if (!la) return false;
+      return (Date.now() - la) < SESSION_TTL;
+    }
+    function _stopSessionTimer() { if (_sessTimer) { clearInterval(_sessTimer); _sessTimer = null; } }
+    function _startSessionTimer() { _stopSessionTimer(); _sessTimer = setInterval(() => { if (USER && !sessionValid()) expireSession(); }, SESSION_TICK); }
+    // hard expiry: wipe auth data, drop back to login, explain why
+    function expireSession() {
+      _stopSessionTimer(); _clearAuthData();
+      try { reset(); } catch (e) { }
+      if (typeof Hary !== 'undefined') Hary.reset();
+      const sv = document.getElementById('selectView'); if (sv) sv.style.display = 'block';
+      const uv = document.getElementById('uploadView'); if (uv) uv.style.display = 'none';
+      const dv = document.getElementById('dashView'); if (dv) dv.style.display = 'none';
+      const av = document.getElementById('adminView'); if (av) av.style.display = 'none';
+      CURRENT = null; PROC = null;
+      showAuth();
+      const lp = document.getElementById('liPass'); if (lp) lp.value = '';
+      authMsg('Your session has expired. Please log in again.', 'warn');
+    }
+    // any interaction slides the window forward
+    (function initActivityTracking() {
+      const bump = () => { if (USER) _touchActivity(); };
+      ['click', 'keydown', 'mousemove', 'wheel', 'touchstart', 'scroll'].forEach(ev =>
+        document.addEventListener(ev, bump, { passive: true, capture: true }));
+      // returning to the tab re-checks immediately instead of waiting for the next tick
+      document.addEventListener('visibilitychange', () => { if (!document.hidden && USER && !sessionValid()) expireSession(); });
+    })();
     function authMsg(t, cls) { const e = document.getElementById('authMsg'); e.textContent = t || ''; e.className = 'auth-msg' + (t ? (' ' + cls) : ''); }
     function showAuth() { document.getElementById('authView').style.display = 'grid'; document.getElementById('appRoot').style.display = 'none'; }
     function showApp() {
@@ -3273,10 +3323,11 @@
       const b = document.getElementById('liBtn'); b.disabled = true; b.textContent = 'Signing in…';
       try {
         const { data, error } = await SB.rpc('login_user', { p_user_id: uid, p_password: pass }); if (error) throw error;
-        if (!data.ok) authMsg(data.error, 'err'); else { setSession({ name: data.name, user_id: data.user_id, token: data.token, role: data.role, dept: data.dept, reports: data.report_access }); showApp(); }
+        if (!data.ok) authMsg(data.error, 'err'); else { setSession({ name: data.name, user_id: data.user_id, token: data.token, role: data.role, dept: data.dept, reports: data.report_access }); _startSessionTimer(); showApp(); }
       } catch (e) { authMsg('Could not log in: ' + (e.message || e), 'err'); } b.disabled = false; b.textContent = 'Login';
     }
     async function doLogout() {
+      _stopSessionTimer();
       try { if (SB && USER && USER.token) await SB.rpc('logout_user', { p_token: USER.token }); } catch (e) { }
       setSession(null); reset(); if (typeof Hary !== 'undefined') Hary.reset();
       document.getElementById('selectView').style.display = 'block';
@@ -3286,10 +3337,16 @@
     }
     async function initAuth() {
       USER = getSession();
+      // expired while the browser was closed -> wipe and force a fresh login
+      if (USER && USER.token && !sessionValid()) {
+        _clearAuthData(); showAuth();
+        authMsg('Your session has expired. Please log in again.', 'warn');
+        return;
+      }
       if (USER && USER.token && SB) {
         try {
           const { data } = await SB.rpc('whoami', { p_token: USER.token });
-          if (data && data.ok) { USER.name = data.name; USER.user_id = data.user_id; USER.role = data.role; USER.dept = data.dept; USER.reports = data.report_access; setSession(USER); showApp(); return; }
+          if (data && data.ok) { USER.name = data.name; USER.user_id = data.user_id; USER.role = data.role; USER.dept = data.dept; USER.reports = data.report_access; setSession(USER); _startSessionTimer(); showApp(); return; }
         } catch (e) { }
       }
       setSession(null); showAuth();
