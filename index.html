@@ -1989,6 +1989,7 @@
         </div>
         <div class="actions">
 
+          <button class="btn btn-ghost nav-more" id="navMore" type="button" title="More actions" aria-label="More actions">⋮</button>
           <span class="rep-actions" id="repActions">
           <button class="btn btn-ghost" id="btnReset" title="Upload new file" disabled><span class="lbl">New</span>
             ↺</button>
@@ -3584,7 +3585,11 @@
       document.getElementById('authView').style.display = 'none'; document.getElementById('appRoot').style.display = 'block';
       const ini = (USER.name || USER.user_id || '?').trim().slice(0, 1).toUpperCase();
       const roleLbl = USER.role === 'admin' ? 'Administrator' : (USER.dept ? USER.dept : 'Manager');
-      document.getElementById('userChip').innerHTML = `<div class="av">${ini}</div><div><div class="nm">${USER.name || USER.user_id}</div><div class="rl">${roleLbl}</div></div>`;
+      const _fullName = USER.name || USER.user_id;
+      const _chip = document.getElementById('userChip');
+      // full name lives in the tooltip (desktop) and in the dropdown (mobile) when it has to be truncated
+      _chip.title = _fullName + ' \u00b7 ' + roleLbl;
+      _chip.innerHTML = `<span class="av">${ini}</span><span class="uc-txt"><span class="nm">${_fullName}</span><span class="rl">${roleLbl}</span></span>`;
       document.getElementById('btnAdmin').style.display = USER.role === 'admin' ? '' : 'none';
       document.body.classList.remove('in-report');
       try { renderCards(); } catch (e) { }   // rebuild the workspace for THIS user (permissions, stats, favourites)
@@ -6541,6 +6546,14 @@
     const wsS = document.getElementById('wsSearch'), wsX = document.getElementById('wsSearchX');
     if (wsS) wsS.oninput = () => { WS_QUERY = wsS.value; if (wsX) wsX.style.display = wsS.value ? 'block' : 'none'; renderCards(); };
     if (wsX) wsX.onclick = () => { wsS.value = ''; WS_QUERY = ''; wsX.style.display = 'none'; renderCards(); wsS.focus(); };
+    // mobile “More” menu holds the report actions so the profile never has to shrink
+    const navMore = document.getElementById('navMore');
+    if (navMore) navMore.onclick = e => { e.stopPropagation(); document.body.classList.toggle('more-open'); };
+    document.addEventListener('click', e => {
+      if (!document.body.classList.contains('more-open')) return;
+      if (e.target.closest('#navMore') || e.target.closest('#repActions')) return;
+      document.body.classList.remove('more-open');
+    });
     document.getElementById('btnSettings').onclick = () => openSettings('account');
     document.getElementById('setClose').onclick = closeSettings;
     document.getElementById('upSettings').onclick = () => openSettings('account');
@@ -7975,6 +7988,88 @@
     body[data-theme="dark"] .act-filters input[type=date] { background: var(--surf2); color: var(--ink); border-color: var(--line); }
     body[data-theme="dark"] .act-count { background: var(--surf3); color: var(--muted); }
     body[data-theme="dark"] .rc-view { border-color: #0f7a52; box-shadow: 0 3px 9px rgba(0,0,0,.4); }
+  </style>
+  <style>
+    /* ===================== RESPONSIVE USER PROFILE IN THE NAVBAR ===================== */
+    /* Base (all sizes): a proper two-line profile chip that can shrink without collapsing. */
+    .userchip { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 0 1 auto;
+      padding: 5px 14px 5px 6px; border-radius: 999px; text-align: left;
+      background: rgba(255, 255, 255, .12); box-shadow: 0 1px 2px rgba(0,0,0,.18), inset 0 0 0 1px rgba(255,255,255,.09); }
+    .userchip .av { width: 32px; height: 32px; flex: none; border-radius: 50%; display: grid; place-items: center;
+      font-weight: 800; font-size: 13.5px; color: #fff;
+      background: linear-gradient(135deg, #4f9ae0, #2f6db0); box-shadow: 0 2px 6px rgba(20,50,90,.35); }
+    .userchip .uc-txt { display: flex; flex-direction: column; justify-content: center; min-width: 0; line-height: 1.15; }
+    .userchip .nm { display: block; font-size: 13px; font-weight: 650; color: #fff;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .userchip .rl { display: block; font-size: 10.5px; font-weight: 500; color: #a8c1d8;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* keep the brand from squeezing the profile out on narrow screens */
+    .topbar .brand { min-width: 0; }
+    .topbar .actions { min-width: 0; }
+
+    /* --- the "More" (kebab) menu : only on small screens, only inside a report --- */
+    .nav-more { display: none; }
+    @media (max-width: 900px) {
+      body.in-report .nav-more { display: inline-flex; align-items: center; justify-content: center;
+        padding: 8px 10px; font-size: 17px; line-height: 1; }
+      body.in-report .rep-actions { position: absolute; right: 12px; top: calc(100% - 4px); z-index: 130;
+        display: none; flex-direction: column; align-items: stretch; gap: 6px; min-width: 190px;
+        padding: 9px; border-radius: 13px; background: var(--surface); border: 1px solid var(--line);
+        box-shadow: 0 16px 40px rgba(10,25,45,.28); }
+      body.in-report.more-open .rep-actions { display: flex; animation: moreIn .16s ease; }
+      body.in-report .rep-actions .btn { width: 100%; justify-content: flex-start; color: var(--ink);
+        background: var(--canvas); border-color: var(--line); }
+      body.in-report .rep-actions .btn .lbl { display: inline !important; }
+      body.in-report .rep-actions .btn-green { color: #fff; }
+      @keyframes moreIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+    }
+
+    /* --- tablet --- */
+    @media (max-width: 900px) {
+      .topbar .actions { gap: 7px; }
+      .userchip { flex: 1 1 auto; max-width: 260px; }
+      .userchip .nm { font-size: 12.5px; }
+    }
+
+    /* --- MOBILE : the profile keeps its name + role, buttons give up the space --- */
+    @media (max-width: 768px) {
+      .topbar .wrap { height: auto; flex-wrap: nowrap; gap: 8px; padding: 9px 12px; }
+      .topbar .brand { flex: 0 1 auto; overflow: hidden; }
+      .topbar .brand-text b { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; max-width: 34vw; }
+      .topbar .brand-text span { font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; max-width: 34vw; }
+      .topbar .actions { flex: 1 1 auto; flex-wrap: nowrap; justify-content: flex-end; gap: 6px; }
+      /* buttons shrink first — the profile does not */
+      .topbar .actions .btn { padding: 8px 10px; font-size: 12px; flex: none; }
+      /* name + role stay visible (this is what used to be hidden) */
+      .userchip .nm, .userchip .rl { display: block; }
+      .userchip { flex: 1 1 auto; min-width: 116px; max-width: 210px; padding: 4px 11px 4px 4px; gap: 8px; }
+      .userchip .av { width: 29px; height: 29px; font-size: 12.5px; }
+      .userchip .nm { font-size: 12px; }
+      .userchip .rl { font-size: 9.5px; }
+    }
+
+    /* --- small phones : shrink type before truncating --- */
+    @media (max-width: 560px) {
+      .topbar .brand-text span { display: none; }
+      .topbar .brand-text b { max-width: 24vw; font-size: 11.5px; }
+      .topbar .actions .btn { padding: 7px 9px; font-size: 11.5px; }
+      .topbar .actions .btn .lbl { display: none; }
+      .userchip { min-width: 104px; max-width: 172px; }
+      .userchip .nm { font-size: 11.5px; }
+      .userchip .rl { font-size: 9px; }
+    }
+    @media (max-width: 420px) {
+      .topbar .brand-text { display: none; }
+      .userchip { max-width: none; min-width: 0; }
+      .userchip .nm { font-size: 11px; }
+    }
+
+    /* --- dark theme --- */
+    body[data-theme="dark"] .userchip { background: rgba(255,255,255,.08);
+      box-shadow: 0 1px 2px rgba(0,0,0,.4), inset 0 0 0 1px rgba(255,255,255,.06); }
+    body[data-theme="dark"] .userchip .rl { color: #9fb6cc; }
+    body[data-theme="dark"] .rep-actions { background: var(--surface); border-color: var(--line); }
   </style>
 </body>
 
