@@ -2245,10 +2245,10 @@
       <div class="ov-head"><b>&#9881; Settings</b><button class="ov-x" id="setClose">&#10005;</button></div>
       <div class="set-wrap">
         <nav class="set-nav">
-          <button type="button" class="set-tab active" data-pane="account"><span>&#128100;</span> Account</button>
-          <button type="button" class="set-tab" data-pane="appearance"><span>&#127912;</span> Appearance</button>
-          <button type="button" class="set-tab" data-pane="security"><span>&#128274;</span> Security</button>
-          <button type="button" class="set-tab" data-pane="about"><span>&#8505;</span> About</button>
+          <button type="button" class="set-tab active" data-pane="account"> Account</button>
+          <button type="button" class="set-tab" data-pane="appearance"> Appearance</button>
+          <button type="button" class="set-tab" data-pane="security"> Security</button>
+          <button type="button" class="set-tab" data-pane="about">About</button>
         </nav>
         <div class="set-body">
           <div class="set-pane" id="pane-account">
@@ -2284,7 +2284,7 @@
       </div>
       <div class="set-foot">
         <span class="set-foot-hint">Signed in as <b id="setWho">&nbsp;</b></span>
-        <button type="button" class="set-logout" id="setLogout">&#9096; Logout</button>
+        <button type="button" class="set-logout" id="setLogout"> Logout</button>
       </div>
     </div>
   </div>
@@ -3400,10 +3400,8 @@
         ['Signed in as', (USER.name || USER.user_id) + ' \u00b7 @' + USER.user_id],
         ['Role', USER.role === 'admin' ? 'Administrator' : 'User'],
         ['Account status', (USER.status === 'approved' || !USER.status) ? 'Active' : USER.status],
-        ['Session started', fmtWhen(USER.loginAt)],
-        ['Last login', fmtWhen(USER.last_login || USER.loginAt)],
-        ['Session policy', 'Automatic logout after 1 hour of inactivity'],
-        ['Session token', USER.token ? String(USER.token).slice(0, 8) + '\u2026 (hidden)' : '\u2014']
+        ['Session policy', 'Automatic logout after 1 hour of inactivity']
+
       ];
       document.getElementById('secList').innerHTML = sec.map(r => '<div class="set-row"><span>' + r[0] + '</span><b>' + escH(r[1]) + '</b></div>').join('');
       const about = [
@@ -5981,7 +5979,7 @@
     function renderWorkspaceHead() {
       const w = document.getElementById('wsWelcome'); if (!w || !USER) return;
       const first = String(USER.name || USER.user_id || '').trim().split(/\s+/)[0] || USER.user_id;
-      w.textContent = 'Welcome back, ' + first + ' Boss!';
+      w.textContent = 'Welcome back, ' + first;
       const allow = allowedReportIds();
       const meta = [
         ['\uD83D\uDEE1', USER.role === 'admin' ? 'Administrator' : 'User'],
