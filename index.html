@@ -1999,7 +1999,7 @@
           <button class="btn btn-green" id="btnXlsx" title="Export as Excel" disabled>⬇ Excel report</button>
           </span>
           <button class="btn btn-ghost" id="btnAdmin" style="display:none" title="Admin dashboard">Admin</button>
-          <button class="btn btn-ghost" id="btnSettings" title="Settings">&#9881; Settings</button>
+          <button class="btn btn-ghost" id="btnSettings" title="Settings"> Settings</button>
           <button class="userchip" type="button" id="userChip" title="Your account"></button>
         </div>
       </div>
@@ -2027,7 +2027,6 @@
           <div class="ws-search">
             <span class="ws-search-ic">&#128269;</span>
             <input type="search" id="wsSearch" placeholder="Search reports, assets, clients, sites, settings…" autocomplete="off">
-            <button type="button" class="ws-search-x" id="wsSearchX" title="Clear" style="display:none">&#10005;</button>
           </div>
         </div>
         <div class="ws-quick" id="wsQuick"></div>
@@ -2213,7 +2212,7 @@
   <!-- ===================== ACCESS DENIED OVERLAY ===================== -->
   <div id="denyView" class="overlay" style="display:none">
     <div class="ov-card" style="max-width:440px">
-      <div class="ov-head" style="background:linear-gradient(135deg,#b3261e,#7a1a15)"><b>⛔ Access Denied</b>
+      <div class="ov-head" style="background:linear-gradient(135deg,#b3261e,#7a1a15)"><b> Access Denied</b>
         <button class="ov-x" onclick="closeDeny()">✕</button></div>
       <div style="padding:26px 24px;text-align:center">
         <div style="font-size:44px;line-height:1;margin-bottom:12px">🔒</div>
@@ -2295,7 +2294,7 @@
       <div class="ov-head" style="background:linear-gradient(135deg,#b3261e,#7a1a15)"><b>Confirm logout</b>
         <button class="ov-x" id="loX">&#10005;</button></div>
       <div style="padding:26px 24px;text-align:center">
-        <div style="font-size:40px;line-height:1;margin-bottom:12px">&#9096;</div>
+        <div style="font-size:40px;line-height:1;margin-bottom:12px"></div>
         <h3 style="margin:0 0 8px;color:var(--ink)">Log out of Report Analyzer?</h3>
         <p style="color:var(--muted);font-size:13.5px;line-height:1.6;margin:0 0 20px">
           Your current report view will be cleared. You&rsquo;ll need to sign in again to continue.</p>
@@ -5977,7 +5976,7 @@
     function renderWorkspaceHead() {
       const w = document.getElementById('wsWelcome'); if (!w || !USER) return;
       const first = String(USER.name || USER.user_id || '').trim().split(/\s+/)[0] || USER.user_id;
-      w.textContent = 'Welcome back, ' + first;
+      w.textContent = 'Welcome back, ' + first + '!';
       const allow = allowedReportIds();
       const meta = [
         ['\uD83D\uDEE1', USER.role === 'admin' ? 'Administrator' : 'User'],
