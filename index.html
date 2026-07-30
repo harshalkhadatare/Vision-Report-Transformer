@@ -5981,7 +5981,7 @@
     function renderWorkspaceHead() {
       const w = document.getElementById('wsWelcome'); if (!w || !USER) return;
       const first = String(USER.name || USER.user_id || '').trim().split(/\s+/)[0] || USER.user_id;
-      w.textContent = 'Welcome back, ' + first;
+      w.textContent = 'Welcome back, ' + first + ' Boss!';
       const allow = allowedReportIds();
       const meta = [
         ['\uD83D\uDEE1', USER.role === 'admin' ? 'Administrator' : 'User'],
