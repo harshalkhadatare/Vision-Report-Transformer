@@ -2235,7 +2235,7 @@
     <div class="up-rows" id="upRows"></div>
     <div class="up-foot">
       <button type="button" class="btn btn-line" id="upSettings">&#9881; Settings</button>
-      <button type="button" class="set-logout sm" id="upLogout">&#9096; Logout</button>
+      <button type="button" class="set-logout sm" id="upLogout">Logout</button>
     </div>
   </div>
 
@@ -3365,12 +3365,10 @@
         ['\uD83D\uDEE1', 'Role', USER.role === 'admin' ? 'Administrator' : 'User'],
         ['\u2709', 'Email', USER.email || 'Not on file'],
         ['\uD83C\uDFE2', 'Department', USER.dept || '\u2014'],
-        ['\u23F1', 'Last login', fmtWhen(USER.last_login || USER.loginAt)],
-        ['\uD83D\uDCC5', 'Account created', fmtWhen(USER.created_at)],
+
         ['\u2B06', 'Reports uploaded', String(s2.uploads)],
         ['\u2B07', 'Reports downloaded', String(s2.downloads)],
-        ['\uD83D\uDCC4', 'Last generated report', s2.last],
-        ['\u2B50', 'Most used report', s2.top],
+
         ['\uD83C\uDFA8', 'Theme', getTheme() === 'dark' ? '\uD83C\uDF19 Dark' : '\uD83C\uDF1E Light']
       ];
       document.getElementById('upRows').innerHTML = rows.map(r =>
