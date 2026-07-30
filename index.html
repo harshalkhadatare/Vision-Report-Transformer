@@ -2172,24 +2172,13 @@
           </div>
         </div>
         <div class="adm-pane" id="admActivity" style="display:none">
-          <div class="adm-filters">
-            <input class="adm-search" id="admActUser" placeholder="Filter by User ID…">
-            <select id="admActAction">
-              <option value="">All actions</option>
-              <option>login</option>
-              <option>logout</option>
-              <option>register</option>
-              <option>login_failed</option>
-              <option>approve</option>
-              <option>reject</option>
-              <option>upload</option>
-              <option>delete_file</option>
-              <option>report</option>
-              <option>password_change</option>
-              <option>password_reset</option>
-              <option>role_rights</option>
-            </select>
-            <button class="btn btn-ghost" onclick="loadAdminActivity()">Apply</button>
+          <div class="adm-filters act-filters">
+            <input class="adm-search" id="admActSearch" placeholder="Search user, report, action, detail…">
+            <select id="admActAction"><option value="">All actions</option></select>
+            <select id="admActRole"><option value="">All roles</option><option value="admin">Administrator</option><option value="user">User</option></select>
+            <input type="date" id="admActDate" title="Filter by date">
+            <button class="btn btn-ghost" id="admActClear" type="button">Clear</button>
+            <span class="act-count" id="admActCount"></span>
           </div>
           <div class="adm-tablewrap">
             <table class="adm-table" id="admActTable"></table>
@@ -3230,18 +3219,95 @@
       if (!confirm('Delete this file for everyone? This cannot be undone.')) return;
       try { const d = await rpc('delete_upload', { p_token: USER.token, p_id: id }); if (!d.ok) { alert(d.error); return; } loadAdminFiles(); loadAdminKpis(); } catch (e) { alert('Failed: ' + (e.message || e)); }
     }
+    /* ----- Activity log : fetch once, then filter / sort / page on the client ----- */
+    let ADM_ACT = [], ACT_SORT = { k: 'created_at', d: -1 }, ACT_LIMIT = 100;
     async function loadAdminActivity() {
       try {
-        const u = (document.getElementById('admActUser').value || '').trim(), a = document.getElementById('admActAction').value;
-        const d = await rpc('admin_list_activity', { p_token: USER.token, p_user: u || null, p_action: a || null, p_limit: 300 });
-        const esc = s => String(s == null ? '' : s).replace(/[<>&"']/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]));
-        const rows = (d.ok && d.rows) || [];
-        let h = '<thead><tr><th>When</th><th>User</th><th>Action</th><th>Detail</th></tr></thead><tbody>';
-        h += rows.map(r => `<tr><td>${new Date(r.created_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</td>
-          <td>${esc(r.name || r.user_id || '—')}</td><td><span class="pill ${r.action === 'login_failed' ? 'rejected' : 'admin'}">${esc(r.action)}</span></td><td>${esc(r.detail) || ''}</td></tr>`).join('')
-          || '<tr><td colspan="4" style="text-align:center;padding:20px">No activity.</td></tr>';
-        document.getElementById('admActTable').innerHTML = h + '</tbody>';
-      } catch (e) { }
+        const d = await rpc('admin_list_activity', { p_token: USER.token, p_user: null, p_action: null, p_limit: 1000 });
+        ADM_ACT = (d.ok && d.rows) || [];
+        // populate the action dropdown from the data itself so it always matches reality
+        const sel = document.getElementById('admActAction');
+        if (sel) {
+          const cur = sel.value;
+          const acts = [...new Set(ADM_ACT.map(r => r.action).filter(Boolean))].sort();
+          sel.innerHTML = '<option value="">All actions</option>' + acts.map(a => '<option>' + a + '</option>').join('');
+          sel.value = cur;
+        }
+        ACT_LIMIT = 100;
+        renderAdminActivity();
+      } catch (e) { const t = document.getElementById('admActTable'); if (t) t.innerHTML = '<tbody><tr><td style="text-align:center;padding:20px">Could not load activity.</td></tr></tbody>'; }
+    }
+    function actRoleOf(userId) {
+      const u = (ADM_USERS || []).find(x => x.user_id === userId);
+      return u ? u.role : '';
+    }
+    function actFiltered() {
+      const q = ((document.getElementById('admActSearch') || {}).value || '').trim().toLowerCase();
+      const a = ((document.getElementById('admActAction') || {}).value || '');
+      const rl = ((document.getElementById('admActRole') || {}).value || '');
+      const dt = ((document.getElementById('admActDate') || {}).value || '');
+      let rows = (ADM_ACT || []).filter(r => {
+        if (a && r.action !== a) return false;
+        if (rl && actRoleOf(r.user_id) !== rl) return false;
+        if (dt) {
+          const d = new Date(r.created_at);
+          const key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+          if (key !== dt) return false;
+        }
+        if (q) {
+          const when = new Date(r.created_at);
+          const hay = [r.name, r.user_id, r.action, r.detail, actRoleOf(r.user_id),
+            when.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })]
+            .map(x => String(x == null ? '' : x)).join(' ').toLowerCase();
+          if (hay.indexOf(q) === -1) return false;
+        }
+        return true;
+      });
+      const k = ACT_SORT.k, dir = ACT_SORT.d;
+      rows.sort((x, y) => {
+        let vx, vy;
+        if (k === 'created_at') { vx = +new Date(x.created_at); vy = +new Date(y.created_at); }
+        else if (k === 'role') { vx = actRoleOf(x.user_id) || ''; vy = actRoleOf(y.user_id) || ''; }
+        else { vx = String(x[k] == null ? '' : x[k]).toLowerCase(); vy = String(y[k] == null ? '' : y[k]).toLowerCase(); }
+        return (vx < vy ? -1 : vx > vy ? 1 : 0) * dir;   // dir = -1 -> newest / Z-first
+      });
+      return rows;
+    }
+    function renderAdminActivity() {
+      const host = document.getElementById('admActTable'); if (!host) return;
+      const esc = t => String(t == null ? '' : t).replace(/[<>&"']/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]));
+      const all = actFiltered(), rows = all.slice(0, ACT_LIMIT);
+      const cnt = document.getElementById('admActCount');
+      if (cnt) cnt.textContent = all.length ? (fmtN(all.length) + ' record' + (all.length === 1 ? '' : 's')) : 'No records';
+      const arrow = k => ACT_SORT.k === k ? ('<span class="ar">' + (ACT_SORT.d > 0 ? '\u25B2' : '\u25BC') + '</span>') : '';
+      let h = '<thead><tr>'
+        + '<th data-k="created_at">When' + arrow('created_at') + '</th>'
+        + '<th data-k="name">User' + arrow('name') + '</th>'
+        + '<th data-k="role">Role' + arrow('role') + '</th>'
+        + '<th data-k="action">Action' + arrow('action') + '</th>'
+        + '<th data-k="detail">Detail' + arrow('detail') + '</th></tr></thead><tbody>';
+      h += rows.map(r => {
+        const w = new Date(r.created_at);
+        const when = w.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        const role = actRoleOf(r.user_id);
+        return '<tr><td>' + when + '</td><td>' + esc(r.name || r.user_id || '\u2014') + '</td>'
+          + '<td>' + (role ? '<span class="pill ' + role + '">' + (role === 'admin' ? 'Administrator' : 'User') + '</span>' : '\u2014') + '</td>'
+          + '<td><span class="pill ' + (r.action === 'login_failed' ? 'rejected' : 'admin') + '">' + esc(r.action) + '</span></td>'
+          + '<td>' + (esc(r.detail) || '') + '</td></tr>';
+      }).join('') || '<tr><td colspan="5" style="text-align:center;padding:20px">No activity matches these filters.</td></tr>';
+      if (all.length > rows.length) {
+        h += '<tr><td colspan="5" style="text-align:center;padding:12px">'
+          + '<button class="btn btn-line" id="actMore">Show ' + fmtN(Math.min(100, all.length - rows.length))
+          + ' more \u00b7 ' + fmtN(all.length - rows.length) + ' remaining</button></td></tr>';
+      }
+      host.innerHTML = h + '</tbody>';
+      host.querySelectorAll('thead th').forEach(th => th.onclick = () => {
+        const k = th.dataset.k; if (!k) return;
+        if (ACT_SORT.k === k) ACT_SORT.d *= -1; else { ACT_SORT.k = k; ACT_SORT.d = -1; }
+        ACT_LIMIT = 100; renderAdminActivity();
+      });
+      const more = document.getElementById('actMore');
+      if (more) more.onclick = () => { ACT_LIMIT += 100; renderAdminActivity(); };
     }
     /* ----- profile / change password ----- */
     function pwStrength2(p) {
@@ -3322,6 +3388,13 @@
       const a = statsAll(); a[uid] = m;
       try { localStorage.setItem(STATS_KEY, JSON.stringify(a)); } catch (e) { }
     }
+    function statsBumpUpload(reportId) {
+      const m = statsMine();
+      m.uploads = (m.uploads || 0) + 1;
+      if (reportId) { m.uses = m.uses || {}; m.uses[reportId] = (m.uses[reportId] || 0) + 1; m.last = reportId; m.lastAt = Date.now(); }
+      statsSave(m);
+      try { if (typeof renderCards === 'function') renderCards(); } catch (e) { }
+    }
     function statsBumpDownload(reportId) {
       const m = statsMine();
       m.downloads = (m.downloads || 0) + 1;
@@ -3337,8 +3410,7 @@
     }
     function userPanelStats() {
       const m = statsMine();
-      let uploads = 0;
-      try { uploads = (typeof UPLOADS !== 'undefined' && UPLOADS ? UPLOADS : []).filter(u => u.user_id === USER.user_id).length; } catch (e) { }
+      const uploads = m.uploads || 0;
       const uses = m.uses || {}; let top = null, topN = 0;
       Object.keys(uses).forEach(k => { if (uses[k] > topN) { topN = uses[k]; top = k; } });
       const nameOf = id => (REPORTS[id] && REPORTS[id].meta) ? REPORTS[id].meta.name : id;
@@ -3652,6 +3724,7 @@
           const { rows, note } = proc.process(wb);
           if (!rows.length) throw new Error('No data rows in this file.');
           RAW = rows; sortKey = null; msState = {}; buildFilters(); applyFilters();
+          try { statsBumpUpload(CURRENT); } catch (e) { }
           document.getElementById('selectView').style.display = 'none';
           document.getElementById('uploadView').style.display = 'none';
           document.getElementById('dashView').style.display = 'block';
@@ -3805,6 +3878,11 @@
         hsd: ['hsdconsumptionqty'], picks: ['picksconsumptionqty'], production: ['production']
       };
       const num = v => { const n = parseFloat(String(v == null ? '' : v).replace(/[, ]/g, '')); return isFinite(n) ? n : 0; };
+      // Business rule: only these fleet types are in scope. Everything else in the ERP dump
+      // (SOIL COMPACTOR, CEMENT SPREADER, STREUMASTER, …) is dropped during processing, so it
+      // never reaches KPIs, charts, filters, tables or the Excel export.
+      const FLEET_ALLOWED = ['MILLING MACHINE', 'SOIL STABILIZER'];
+      const fleetOk = v => FLEET_ALLOWED.indexOf(String(v == null ? '' : v).trim().toUpperCase()) !== -1;
       const BLANK = '(blank)';
       const txt = v => { const s = String(v == null ? '' : v).trim(); return s || BLANK; };
 
@@ -3820,6 +3898,7 @@
           const r = aoa[i]; if (!r || !r.length) continue;
           const d = toDate(r[m.date]); if (!d) continue;
           const eqp = String(r[m.eqp] == null ? '' : r[m.eqp]).trim(); if (!eqp) continue;
+          if (m.fleet === undefined || !fleetOk(r[m.fleet])) continue;   // out-of-scope fleet type
           const y = d.getFullYear(), mo = d.getMonth();
           rows.push({
             cpc: txt(r[m.cpc]), lob: txt(r[m.lob]), docNo: txt(r[m.docNo]), date: d,
@@ -3835,11 +3914,11 @@
             dayKey: ymd(d)
           });
         }
-        if (!rows.length) throw new Error('No milling rows found. Check that the workbook has a "Main Shet" sheet with DOCUMENT DATE and EQUIPMENT NUMBER.');
+        if (!rows.length) throw new Error('No MILLING MACHINE or SOIL STABILIZER rows found. Check that the workbook has a "Main Shet" sheet with DOCUMENT DATE, EQUIPMENT NUMBER and FLEET TYPE.');
         const hrs = rows.reduce((s, r) => s + r.runHrs, 0), sqm = rows.reduce((s, r) => s + r.sqm, 0);
         return {
           rows,
-          note: `${fmtN(rows.length)} logsheet rows \u00b7 ${fmtN(new Set(rows.map(r => r.eqp)).size)} machines \u00b7 ${fmtN(hrs, 2)} running hrs \u00b7 ${fmtN(sqm, 2)} sq.mtr \u00b7 export gives <b>Main Shet</b> + <b>R1 R2 R4 R6 R7 R9</b> + <b>Fleet</b>.`
+          note: `${fmtN(rows.length)} logsheet rows (MILLING MACHINE + SOIL STABILIZER only) \u00b7 ${fmtN(new Set(rows.map(r => r.eqp)).size)} machines \u00b7 ${fmtN(hrs, 2)} running hrs \u00b7 ${fmtN(sqm, 2)} sq.mtr \u00b7 export gives <b>Main Shet</b> + <b>R1 R2 R4 R6 R7 R9</b> + <b>Fleet</b>.`
         };
       }
 
@@ -3993,8 +4072,11 @@
         { key: 'picks', label: 'Picks Consumption Qty', type: 'num2' },
         { key: 'production', label: 'Production', type: 'num2' }
       ];
-      // web data-grid hides Thickness Group (still exported and still filterable)
-      const tableColumns = columns.filter(c => c.key !== 'thkGrp');
+      // web data-grid hides Thickness Group (still exported and still filterable).
+      // renderTable formats cells from `fmt`, while the Excel writer uses `type` — map across so
+      // Document Date renders as "01 Apr 2026" instead of a raw JS Date string.
+      const tableColumns = columns.filter(c => c.key !== 'thkGrp')
+        .map(c => ({ key: c.key, label: c.label, fmt: c.type }));
 
       const filters = [
         { key: 'day', label: 'Day-wise (calendar)', type: 'calendar', from: 'date', to: 'date' },
@@ -5960,17 +6042,47 @@
           + '<p>' + escH(shortTag(pr.meta.tagline)) + '</p>'
           + '<div class="rc-foot">'
           + (locked ? '<span class="rc-locked">\uD83D\uDD12 Restricted</span>' : '<span class="rc-go">Open \u2192</span>')
+          + '<button type="button" class="rc-view" data-view="' + id + '" title="Open the latest uploaded report">'
+          + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+          + '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg> View</button>'
           + '</div></article>';
       });
       host.innerHTML = html;
       if (empty) empty.style.display = ids.length ? 'none' : 'block';
       host.querySelectorAll('.rc-fav').forEach(b => b.onclick = e => { e.stopPropagation(); favToggle(b.dataset.fav); });
+      host.querySelectorAll('.rc-view').forEach(b => b.onclick = e => { e.stopPropagation(); viewLatestReport(b.dataset.view); });
       host.querySelectorAll('.rcard').forEach(c => c.onclick = () => {
         const id = c.dataset.id;
         if (c.classList.contains('locked')) { showAccessDenied(REPORTS[id] && REPORTS[id].meta ? REPORTS[id].meta.name : ''); return; }
         selectReport(id);
       });
       renderWorkspaceHead(); renderQuickAccess(); renderCrumbs(); renderSideNav();
+    }
+
+    /* Open the most recent stored upload for a report — respects Role Rights. */
+    async function viewLatestReport(id) {
+      const proc = REPORTS[id]; if (!proc) return;
+      if (!canAccessReport(id)) { showAccessDenied(proc.meta ? proc.meta.name : ''); return; }
+      if (!SB || !USER || !USER.token) {
+        setMsg('<b>No report available.</b> Please upload an ERP Excel file first.', 'err'); return;
+      }
+      showLoad('Looking for the latest ' + proc.meta.name + ' \u2026');
+      try {
+        const { data } = await SB.rpc('list_uploads', { p_token: USER.token, p_report_type: id });
+        const rows = (data && data.ok && data.rows) || [];
+        const latest = rows.find(u => u.storage_path);
+        hideLoad();
+        if (!latest) {
+          setMsg('<b>No report available.</b> Please upload an ERP Excel file first.', 'err');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+          return;
+        }
+        RECENT[latest.id] = latest;
+        viewUpload(latest.id);
+      } catch (e) {
+        hideLoad();
+        setMsg('<b>No report available.</b> Please upload an ERP Excel file first.', 'err');
+      }
     }
 
     function renderWorkspaceHead() {
@@ -6045,6 +6157,7 @@
             const wb = XLSX.read(e.target.result, { type: 'array', cellDates: true, dense: true, WTF: false });
             const { rows, note } = PROC.process(wb); if (!rows.length) throw new Error('No data rows were read from this file.');
             RAW = rows; sortKey = null; msState = {}; buildFilters(); applyFilters();
+          try { statsBumpUpload(CURRENT); } catch (e) { }
             document.getElementById('uploadView').style.display = 'none'; document.getElementById('dashView').style.display = 'block';
             ['btnReset', 'btnCsv', 'btnPdf', 'btnXlsx'].forEach(id => document.getElementById(id).disabled = false);
             setMsg(`<b>${PROC.meta.name} loaded.</b> ${note}`, 'ok');
@@ -6364,10 +6477,12 @@
       const cols = PROC.columns; const head = cols.map(c => c.label); const q = s => `"${String(s ?? '').replace(/"/g, '""')}"`;
       const lines = [head.map(q).join(',')];
       VIEW.forEach((r, i) => lines.push(cols.map(c => { if (c.type === 'sr') return i + 1; let v = r[c.key]; if (v instanceof Date && !isNaN(v)) v = v.getFullYear() + '-' + String(v.getMonth() + 1).padStart(2, '0') + '-' + String(v.getDate()).padStart(2, '0'); if (c.type === 'num2') v = (+r[c.key] || 0).toFixed(2); return q(v); }).join(',')));
+      try { statsBumpDownload(CURRENT); } catch (e) { }
       const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
       a.download = PROC.exportName + '-' + new Date().toISOString().slice(0, 10) + '.csv'; a.click();
     }
     async function exportPdf() {
+      try { statsBumpDownload(CURRENT); } catch (e) { }
       showLoad('Building PDF…');
       try {
         const { jsPDF } = window.jspdf; const node = document.getElementById('dashView');
@@ -6434,6 +6549,19 @@
     document.getElementById('loX').onclick = closeLogoutConfirm;
     document.getElementById('loConfirm').onclick = () => { closeLogoutConfirm(); doLogout(); };
     document.querySelectorAll('.set-tab').forEach(t => t.onclick = () => setSettingsPane(t.dataset.pane));
+    // Activity log filters — live search + dropdowns + date, all combinable
+    ['admActSearch', 'admActAction', 'admActRole', 'admActDate'].forEach(id => {
+      const el = document.getElementById(id); if (!el) return;
+      const ev = (el.tagName === 'SELECT' || el.type === 'date') ? 'change' : 'input';
+      el.addEventListener(ev, () => { ACT_LIMIT = 100; renderAdminActivity(); });
+    });
+    const actClr = document.getElementById('admActClear');
+    if (actClr) actClr.onclick = () => {
+      ['admActSearch', 'admActAction', 'admActRole', 'admActDate'].forEach(id => {
+        const el = document.getElementById(id); if (el) el.value = '';
+      });
+      ACT_LIMIT = 100; renderAdminActivity();
+    };
     // close the user panel on any outside click / Escape
     document.addEventListener('click', e => {
       const pn = document.getElementById('userPanel');
@@ -7814,6 +7942,38 @@
     .app-shell { display: block !important; }
     .app-main { min-width: 0; }
     .sidenav, .sn-open { display: none !important; }
+  </style>
+  <style>
+    /* ===================== GREEN "VIEW" BUTTON ON REPORT CARDS ===================== */
+    .rc-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .rc-view { display: inline-flex; align-items: center; gap: 6px; margin-left: auto;
+      padding: 7px 13px; border-radius: 9px; cursor: pointer; font: inherit; font-size: 12px;
+      font-weight: 700; color: #fff; border: 1px solid #148f5f;
+      background: linear-gradient(180deg, #22b573, #12885a);
+      box-shadow: 0 3px 9px rgba(18,136,90,.30);
+      transition: transform .12s ease, box-shadow .18s ease, filter .18s ease; }
+    .rc-view svg { width: 14px; height: 14px; }
+    .rc-view:hover { transform: translateY(-1px); filter: brightness(1.06);
+      box-shadow: 0 6px 15px rgba(18,136,90,.42); }
+    .rc-view:active { transform: translateY(0); }
+    .rcard.locked .rc-view { background: linear-gradient(180deg, #9fb0bf, #7d8e9d); border-color: #6d7d8c;
+      box-shadow: none; cursor: not-allowed; }
+
+    /* ===================== ACTIVITY LOG FILTER BAR ===================== */
+    .act-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-bottom: 12px; }
+    .act-filters .adm-search { flex: 1 1 240px; min-width: 190px; }
+    .act-filters select, .act-filters input[type=date] { padding: 8px 11px; font: inherit; font-size: 13px;
+      color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 9px; }
+    .act-count { margin-left: auto; font-size: 11.5px; font-weight: 700; color: var(--muted);
+      background: var(--sky); padding: 5px 11px; border-radius: 20px; white-space: nowrap; }
+    #admActTable thead th { cursor: pointer; user-select: none; }
+    #admActTable thead th .ar { margin-left: 5px; font-size: 9px; opacity: .85; }
+
+    /* dark theme */
+    body[data-theme="dark"] .act-filters select,
+    body[data-theme="dark"] .act-filters input[type=date] { background: var(--surf2); color: var(--ink); border-color: var(--line); }
+    body[data-theme="dark"] .act-count { background: var(--surf3); color: var(--muted); }
+    body[data-theme="dark"] .rc-view { border-color: #0f7a52; box-shadow: 0 3px 9px rgba(0,0,0,.4); }
   </style>
 </body>
 
