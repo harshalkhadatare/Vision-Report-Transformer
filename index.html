@@ -1989,7 +1989,7 @@
         </div>
         <div class="actions">
 
-          <button class="btn btn-ghost nav-more" id="navMore" type="button" title="More actions" aria-label="More actions">⋮</button>
+          <button class="btn btn-ghost nav-more" id="navMore" type="button" title="Report actions" aria-label="Report actions" aria-haspopup="true" aria-expanded="false"><span class="nm-ic">⋮</span><span class="nm-lbl">Actions</span></button>
           <span class="rep-actions" id="repActions">
           <button class="btn btn-ghost" id="btnReset" title="Upload new file" disabled><span class="lbl">New</span>
             ↺</button>
@@ -3593,6 +3593,7 @@
       document.getElementById('btnAdmin').style.display = USER.role === 'admin' ? '' : 'none';
       document.body.classList.remove('in-report');
       try { renderCards(); } catch (e) { }   // rebuild the workspace for THIS user (permissions, stats, favourites)
+      syncReportChrome();
     }
     function swapAuth(toReg) {
       document.getElementById('loginForm').style.display = toReg ? 'none' : 'block';
@@ -3734,7 +3735,12 @@
           document.getElementById('selectView').style.display = 'none';
           document.getElementById('uploadView').style.display = 'none';
           document.getElementById('dashView').style.display = 'block';
+          // ROOT CAUSE FIX: opening a report from the green View button or Recent uploads
+          // never set this, so the action buttons stayed hidden until a manual refresh.
+          document.body.classList.add('in-report');
+          try { const _c = catOf(u.report_type); if (_c) WS_FOLDER = _c.id; renderCrumbs(); } catch (e) { }
           ['btnReset', 'btnCsv', 'btnPdf', 'btnXlsx'].forEach(x => document.getElementById(x).disabled = false);
+          syncReportChrome();
           setMsg(`<b>Viewing ${proc.meta.name}:</b> ${u.file_name} — ${note}`, 'ok');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         } catch (e) { setMsg('Could not open this report: ' + (e.message || e), 'err'); }
@@ -5939,7 +5945,7 @@
       if (dv) dv.style.display = 'none';
       const fg = document.getElementById('wsFolders');
       if (fg) { fg.classList.remove('anim'); void fg.offsetWidth; fg.classList.add('anim'); }
-      renderCards();
+      renderCards(); syncReportChrome();
     }
 
     /* ---- breadcrumb : Home > Folder > Report ---- */
@@ -6137,6 +6143,7 @@
       if (!canAccessReport(id)) { showAccessDenied(REPORTS[id] && REPORTS[id].meta ? REPORTS[id].meta.name : ''); return; }
       CURRENT = id; PROC = REPORTS[id]; msState = {};
       document.body.classList.add('in-report');
+      setTimeout(syncReportChrome, 0);
       try { const _c = catOf(id); if (_c) WS_FOLDER = _c.id; renderCrumbs(); } catch (e) { }
       try { renderSideNav(); } catch (e) { }
       document.getElementById('chosenName').textContent = PROC.meta.name;
@@ -6146,7 +6153,29 @@
       document.getElementById('uploadView').style.display = 'block';
       document.getElementById('dashView').style.display = 'none'; setMsg(''); loadRecent(id);
     }
-    function changeType() { reset(); document.body.classList.remove('in-report'); document.getElementById('selectView').style.display = 'block'; document.getElementById('uploadView').style.display = 'none'; renderCards(); }
+    /* ---------------------------------------------------------------------------
+       Report-only chrome (New / CSV / PDF / Excel).
+       Visibility is DERIVED from the real view state instead of being toggled by hand
+       at each call site — that is what let viewUpload() open a dashboard with the
+       buttons still hidden. Every path that changes views just calls this.
+    --------------------------------------------------------------------------- */
+    function syncReportChrome() {
+      const dv = document.getElementById('dashView'), uv = document.getElementById('uploadView');
+      const vis = el => !!el && el.style.display !== 'none' && el.style.display !== '';
+      const inReport = vis(dv) || vis(uv);
+      document.body.classList.toggle('in-report', inReport);
+      if (!inReport) document.body.classList.remove('more-open');
+      const hasData = (typeof VIEW !== 'undefined' && VIEW && VIEW.length > 0);
+      const nw = document.getElementById('btnReset'); if (nw) nw.disabled = !inReport;
+      ['btnCsv', 'btnPdf', 'btnXlsx'].forEach(id => {
+        const b = document.getElementById(id); if (b) b.disabled = !hasData;
+      });
+    }
+    // bfcache restore (browser back/forward) and tab re-focus can revive stale DOM — re-sync.
+    window.addEventListener('pageshow', syncReportChrome);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) syncReportChrome(); });
+
+    function changeType() { reset(); document.body.classList.remove('in-report'); document.getElementById('selectView').style.display = 'block'; document.getElementById('uploadView').style.display = 'none'; renderCards(); syncReportChrome(); }
     const showLoad = t => { document.getElementById('loadtext').textContent = t || 'Processing…'; document.getElementById('loader').classList.add('on'); };
     const hideLoad = () => document.getElementById('loader').classList.remove('on');
     function setMsg(html, cls) { document.getElementById('msg').innerHTML = html ? `<div class="alert ${cls}">${html}</div>` : ''; }
@@ -6165,6 +6194,7 @@
             RAW = rows; sortKey = null; msState = {}; buildFilters(); applyFilters();
           try { statsBumpUpload(CURRENT); } catch (e) { }
             document.getElementById('uploadView').style.display = 'none'; document.getElementById('dashView').style.display = 'block';
+            syncReportChrome();
             ['btnReset', 'btnCsv', 'btnPdf', 'btnXlsx'].forEach(id => document.getElementById(id).disabled = false);
             setMsg(`<b>${PROC.meta.name} loaded.</b> ${note}`, 'ok');
             uploadAndRecord(CURRENT, file, rows.length);
@@ -6548,11 +6578,16 @@
     if (wsX) wsX.onclick = () => { wsS.value = ''; WS_QUERY = ''; wsX.style.display = 'none'; renderCards(); wsS.focus(); };
     // mobile “More” menu holds the report actions so the profile never has to shrink
     const navMore = document.getElementById('navMore');
-    if (navMore) navMore.onclick = e => { e.stopPropagation(); document.body.classList.toggle('more-open'); };
+    if (navMore) navMore.onclick = e => {
+      e.stopPropagation();
+      const open = document.body.classList.toggle('more-open');
+      navMore.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
     document.addEventListener('click', e => {
       if (!document.body.classList.contains('more-open')) return;
       if (e.target.closest('#navMore') || e.target.closest('#repActions')) return;
       document.body.classList.remove('more-open');
+      if (navMore) navMore.setAttribute('aria-expanded', 'false');
     });
     document.getElementById('btnSettings').onclick = () => openSettings('account');
     document.getElementById('setClose').onclick = closeSettings;
@@ -8070,6 +8105,47 @@
       box-shadow: 0 1px 2px rgba(0,0,0,.4), inset 0 0 0 1px rgba(255,255,255,.06); }
     body[data-theme="dark"] .userchip .rl { color: #9fb6cc; }
     body[data-theme="dark"] .rep-actions { background: var(--surface); border-color: var(--line); }
+  </style>
+  <style>
+    /* ===================== REPORT ACTION BAR : RESPONSIVE ===================== */
+    /* Desktop (>1100px): full buttons. */
+    .rep-actions .btn { white-space: nowrap; }
+    .topbar .wrap { position: relative; }
+    .topbar .actions { flex-wrap: nowrap; overflow: visible; }
+
+    /* --- Tablet / small laptop: compact, still inline --- */
+    @media (max-width: 1100px) and (min-width: 901px) {
+      .topbar .actions { gap: 6px; }
+      .rep-actions { gap: 5px; }
+      .rep-actions .btn { padding: 8px 10px; font-size: 12px; }
+      #btnXlsx { font-size: 0; padding: 8px 12px; }
+      #btnXlsx::after { content: "\2B07 Excel"; font-size: 12px; font-weight: 600; }
+    }
+
+    /* --- Mobile: a single Actions menu (Option A) --- */
+    .nav-more .nm-ic { font-size: 16px; line-height: 1; }
+    .nav-more .nm-lbl { margin-left: 6px; }
+    @media (max-width: 900px) {
+      body.in-report .nav-more { padding: 8px 12px; font-size: 12.5px; font-weight: 650; }
+      body.in-report.more-open .nav-more { background: rgba(255,255,255,.24); }
+      body.in-report .rep-actions { min-width: 216px; padding: 10px; border-radius: 14px;
+        top: calc(100% + 6px); right: 12px; box-shadow: 0 18px 44px rgba(10,25,45,.30); }
+      body.in-report .rep-actions .btn { justify-content: flex-start; gap: 9px;
+        padding: 10px 13px; font-size: 13px; box-shadow: none; }
+      body.in-report .rep-actions .btn:hover:not(:disabled) { background: var(--sky); border-color: var(--steel); }
+      body.in-report .rep-actions .btn:disabled { opacity: .5; }
+      body.in-report .rep-actions .btn-green { color: #fff;
+        background: linear-gradient(180deg, #22b573, #12885a); border-color: #148f5f; }
+      #btnCsv .lbl::after, #btnPdf .lbl::after { content: " export"; opacity: .6; font-size: 11px; }
+    }
+    @media (max-width: 560px) {
+      .nav-more .nm-lbl { display: none; }          /* icon-only trigger on tiny screens */
+      body.in-report .nav-more { padding: 7px 10px; }
+      body.in-report .rep-actions { right: 8px; min-width: 202px; }
+    }
+
+    body[data-theme="dark"] .rep-actions .btn { background: var(--surf2); color: var(--ink); border-color: var(--line); }
+    body[data-theme="dark"] .rep-actions .btn:hover:not(:disabled) { background: var(--surf3); }
   </style>
 </body>
 
