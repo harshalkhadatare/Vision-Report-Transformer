@@ -216,16 +216,26 @@ module.exports = async (req, res) => {
     return;
   }
 
-  const sb = (fn, args) => fetch(SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/rpc/' + fn, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: SUPABASE_SERVICE_KEY,
-      Authorization: 'Bearer ' + SUPABASE_SERVICE_KEY
-    },
-    body: JSON.stringify(args)
-  }).then(r => r.json());
+  // NOTE: some RPCs (email_mark_sent) are `returns void` and reply 204 with an
+  // EMPTY body. Calling .json() on that throws "Unexpected end of JSON input",
+  // which used to be caught below and logged as a phantom 'failed' row right
+  // after a successful send. Read text first, parse only if there is something.
+  const sb = async (fn, args) => {
+    const r = await fetch(SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/rpc/' + fn, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: 'Bearer ' + SUPABASE_SERVICE_KEY
+      },
+      body: JSON.stringify(args)
+    });
+    const raw = await r.text();
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch (e) { return null; }
+  };
 
+  let logged = false;
   try {
     const payload = await sb('email_payload_svc', { p_id: scheduleId });
     if (!payload || payload.ok !== true) {
@@ -239,7 +249,8 @@ module.exports = async (req, res) => {
     if (testTo) recipients = [{ name: 'Test recipient', user_id: 'test', email: testTo }];
 
     if (!recipients.length) {
-      await sb('email_mark_sent', { p_id: scheduleId, p_status: 'skipped', p_detail: 'No recipients have an email address on file.' });
+      try { await sb('email_mark_sent', { p_id: scheduleId, p_status: 'skipped', p_detail: 'No recipients have an email address on file.' }); } catch (_) { }
+      logged = true;
       res.status(200).json({ ok: false, error: 'No recipients have an email address on file.' });
       return;
     }
@@ -268,11 +279,17 @@ module.exports = async (req, res) => {
 
     const status = failures.length === 0 ? 'sent' : (sent > 0 ? 'partial' : 'failed');
     const detail = sent + ' sent' + (failures.length ? ' \u00b7 ' + failures.length + ' failed \u00b7 ' + failures[0] : '');
-    if (!testTo) await sb('email_mark_sent', { p_id: scheduleId, p_status: status, p_detail: detail });
+    // logging must never turn a successful send into a 'failed' row
+    if (!testTo) { try { await sb('email_mark_sent', { p_id: scheduleId, p_status: status, p_detail: detail }); } catch (_) { } }
+    logged = true;
 
     res.status(200).json({ ok: sent > 0, sent, failed: failures.length, detail });
   } catch (e) {
-    try { await sb('email_mark_sent', { p_id: scheduleId, p_status: 'failed', p_detail: String(e.message || e) }); } catch (_) { }
+    // only log here if the send itself never reported a result, otherwise a
+    // post-send hiccup would append a duplicate 'failed' row to a real send.
+    if (!logged && !testTo) {
+      try { await sb('email_mark_sent', { p_id: scheduleId, p_status: 'failed', p_detail: String(e.message || e) }); } catch (_) { }
+    }
     res.status(200).json({ ok: false, error: 'Send failed: ' + (e.message || e) });
   }
 };
