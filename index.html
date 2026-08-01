@@ -2143,6 +2143,7 @@
         <button class="adm-tab" data-tab="files">Files</button>
         <button class="adm-tab" data-tab="activity">Activity Log</button>
         <button class="adm-tab" data-tab="rights">Role Rights</button>
+        <button class="adm-tab" data-tab="mail">Email Alerts</button>
       </div>
       <div class="adm-body">
         <div class="adm-pane" id="admKpi">
@@ -2185,6 +2186,18 @@
           <div class="adm-tablewrap">
             <table class="adm-table" id="admActTable"></table>
           </div>
+        </div>
+        <div class="adm-pane" id="admMail" style="display:none">
+          <div id="mailList">
+            <div class="mail-top">
+              <button class="btn btn-primary" id="mailNew" type="button">+ New schedule</button>
+              <span class="mail-hint" id="mailHint"></span>
+            </div>
+            <div class="adm-tablewrap"><table class="adm-table" id="mailTable"></table></div>
+            <h6 class="mail-h6">Recent sends</h6>
+            <div class="adm-tablewrap"><table class="adm-table" id="mailLogTable"></table></div>
+          </div>
+          <div id="mailEditor" style="display:none"></div>
         </div>
         <div class="adm-pane" id="admRights" style="display:none">
           <div id="rightsList">
@@ -3075,9 +3088,10 @@
     function closeAdmin() { document.getElementById('adminView').style.display = 'none'; ADM_CHARTS.forEach(c => { try { c.destroy(); } catch (e) { } }); ADM_CHARTS = []; }
     function switchAdminTab(t) {
       document.querySelectorAll('.adm-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === t));
-      [['kpi', 'admKpi'], ['users', 'admUsers'], ['files', 'admFiles'], ['activity', 'admActivity'], ['rights', 'admRights']].forEach(([k, id]) =>
+      [['kpi', 'admKpi'], ['users', 'admUsers'], ['files', 'admFiles'], ['activity', 'admActivity'], ['rights', 'admRights'], ['mail', 'admMail']].forEach(([k, id]) =>
         document.getElementById(id).style.display = (k === t ? 'block' : 'none'));
       if (t === 'rights') { document.getElementById('rightsEditor').style.display = 'none'; document.getElementById('rightsList').style.display = 'block'; loadAdminUsers().then(renderRights); }
+      if (t === 'mail') { closeMailEditor(); loadAdminUsers().then(loadSchedules); }
     }
     async function rpc(fn, args) { const { data, error } = await SB.rpc(fn, args); if (error) throw error; return data; }
     async function loadAdminKpis() {
@@ -3098,9 +3112,9 @@
     async function loadAdminUsers() { try { const d = await rpc('admin_list_users', { p_token: USER.token }); ADM_USERS = (d.ok && d.rows) || []; renderAdminUsers(); } catch (e) { } }
     function renderAdminUsers() {
       const q = (document.getElementById('admUserSearch').value || '').toLowerCase();
-      const rows = ADM_USERS.filter(u => !q || (u.name + ' ' + u.user_id + ' ' + (u.dept || '')).toLowerCase().includes(q));
+      const rows = ADM_USERS.filter(u => !q || (u.name + ' ' + u.user_id + ' ' + (u.dept || '') + ' ' + (u.email || '')).toLowerCase().includes(q));
       const esc = s => String(s == null ? '' : s).replace(/[<>&"']/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]));
-      let h = '<thead><tr><th>Name</th><th>User ID</th><th>Dept</th><th>Role</th><th>Status</th><th>Last login</th><th>Actions</th></tr></thead><tbody>';
+      let h = '<thead><tr><th>Name</th><th>User ID</th><th>Email</th><th>Dept</th><th>Role</th><th>Status</th><th>Last login</th><th>Actions</th></tr></thead><tbody>';
       h += rows.map(u => {
         const locked = u.locked_until && new Date(u.locked_until) > new Date();
         const act = [];
@@ -3110,12 +3124,13 @@
           ? `<button class="abtn ok" onclick="admUser('enable','${u.user_id}')">Enable</button>`
           : `<button class="abtn mut" onclick="admUser('disable','${u.user_id}')">Disable</button>`);
         if (locked) act.push(`<button class="abtn bl" onclick="admUser('unlock','${u.user_id}')">Unlock</button>`);
+        act.push(`<button class="abtn bl" onclick="admUser('email','${u.user_id}')">${u.email ? 'Edit email' : 'Add email'}</button>`);
         act.push(`<button class="abtn bl" onclick="admUser('rename','${u.user_id}')">Rename</button>`);
         act.push(`<button class="abtn bl" onclick="admUser('reset','${u.user_id}')">Reset pwd</button>`);
         act.push(`<button class="abtn mut" onclick="admUser('role','${u.user_id}','${u.role === 'admin' ? 'user' : 'admin'}')">${u.role === 'admin' ? 'Revoke admin' : 'Make admin'}</button>`);
         act.push(`<button class="abtn no" onclick="admUser('delete','${u.user_id}')">Delete</button>`);
         const ll = u.last_login ? new Date(u.last_login).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
-        return `<tr><td>${esc(u.name)}</td><td>${esc(u.user_id)}</td><td>${esc(u.dept) || '—'}</td>
+        return `<tr><td>${esc(u.name)}</td><td>${esc(u.user_id)}</td><td>${u.email ? esc(u.email) : '<span class="no-email" title="No email on file — this user cannot receive report notifications">⚠ not set</span>'}</td><td>${esc(u.dept) || '—'}</td>
           <td><span class="pill ${u.role}">${u.role}</span></td>
           <td><span class="pill ${u.status}">${u.status}</span>${locked ? ' 🔒' : ''}</td>
           <td>${ll}</td><td>${act.join(' ')}</td></tr>`;
@@ -3130,6 +3145,12 @@
           if (!confirm(`Set ${uid} to "${args.p_status}"?`)) return;
         } else if (action === 'unlock') { fn = 'admin_unlock_user'; }
         else if (action === 'role') { fn = 'admin_set_role'; args.p_role = extra; if (!confirm(`Change ${uid} role to ${extra}?`)) return; }
+        else if (action === 'email') {
+          const cur = (ADM_USERS.find(x => x.user_id === uid) || {}).email || '';
+          const ne = prompt('Email address for ' + uid + '\n(leave blank to clear):', cur);
+          if (ne === null) return;                       // cancelled
+          fn = 'admin_set_email'; args.p_email = ne.trim();
+        }
         else if (action === 'rename') { const nu = prompt('New User ID for ' + uid + ':'); if (!nu) return; fn = 'admin_change_username'; args.p_new_user_id = nu; }
         else if (action === 'reset') { const np = prompt('New password (min 4 characters) for ' + uid + ':'); if (!np) return; fn = 'admin_reset_password'; args.p_new_password = np; }
         else if (action === 'delete') { if (!confirm('Permanently DELETE user ' + uid + '? This cannot be undone.')) return; fn = 'admin_delete_user'; }
@@ -3138,6 +3159,157 @@
         loadAdminUsers(); loadAdminKpis();
       } catch (e) { alert('Action failed: ' + (e.message || e)); }
     }
+    /* ===================== EMAIL ALERTS (scheduled report notifications) ===================== */
+    let SCHEDULES = [], MAIL_EDIT = null;
+    const DAYS = [['0','Sun'],['1','Mon'],['2','Tue'],['3','Wed'],['4','Thu'],['5','Fri'],['6','Sat']];
+
+    async function loadSchedules() {
+      try {
+        const d = await rpc('admin_list_schedules', { p_token: USER.token });
+        SCHEDULES = (d.ok && d.rows) || [];
+      } catch (e) { SCHEDULES = []; }
+      renderSchedules();
+      loadEmailLog();
+    }
+    function withoutEmail() {
+      return (ADM_USERS || []).filter(u => u.status === 'approved' && !u.email).length;
+    }
+    function renderSchedules() {
+      const host = document.getElementById('mailTable'); if (!host) return;
+      const hint = document.getElementById('mailHint');
+      const n = withoutEmail();
+      if (hint) hint.innerHTML = n ? '\u26a0 ' + n + ' approved user' + (n===1?'':'s') + ' still have no email address \u2014 they cannot be sent alerts.' : '';
+      let h = '<thead><tr><th>Title</th><th>Reports</th><th>Recipients</th><th>When</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+      h += SCHEDULES.map(s2 => {
+        const rts = (s2.report_types || []).map(r => (REPORTS[r] && REPORTS[r].meta) ? REPORTS[r].meta.name : r);
+        const days = (s2.days || []).map(d => (DAYS.find(x => x[0] === String(d)) || [,d])[1]).join(', ');
+        const last = s2.last_sent_at ? fmtWhen(s2.last_sent_at) : 'never';
+        const badge = s2.enabled ? '<span class="pill approved">On</span>' : '<span class="pill pending">Paused</span>';
+        return '<tr><td><b>' + escH(s2.title) + '</b></td>'
+          + '<td>' + escH(rts.join(', ')) + '</td>'
+          + '<td>' + (s2.recipients || []).length + '</td>'
+          + '<td>' + escH(s2.send_time) + '<div class="mail-sub">' + escH(days) + '</div></td>'
+          + '<td>' + badge + '<div class="mail-sub">last: ' + escH(last) + (s2.last_status ? ' (' + escH(s2.last_status) + ')' : '') + '</div></td>'
+          + '<td><button class="abtn bl" onclick="openMailEditor(\'' + s2.id + '\')">Edit</button>'
+          + '<button class="abtn ok" onclick="sendTest(\'' + s2.id + '\')">Send test</button>'
+          + '<button class="abtn mut" onclick="toggleSchedule(\'' + s2.id + '\')">' + (s2.enabled ? 'Pause' : 'Resume') + '</button>'
+          + '<button class="abtn no" onclick="deleteSchedule(\'' + s2.id + '\')">Delete</button></td></tr>';
+      }).join('') || '<tr><td colspan="6" style="text-align:center;padding:22px">No schedules yet. Click <b>+ New schedule</b> to create one.</td></tr>';
+      host.innerHTML = h + '</tbody>';
+    }
+
+    async function loadEmailLog() {
+      const host = document.getElementById('mailLogTable'); if (!host) return;
+      try {
+        const d = await rpc('admin_email_log', { p_token: USER.token, p_limit: 30 });
+        const rows = (d.ok && d.rows) || [];
+        let h = '<thead><tr><th>When</th><th>Schedule</th><th>Status</th><th>Detail</th></tr></thead><tbody>';
+        h += rows.map(r => '<tr><td>' + fmtWhen(r.sent_at) + '</td><td>' + escH(r.title || '\u2014') + '</td>'
+          + '<td><span class="pill ' + (r.status === 'sent' ? 'approved' : r.status === 'failed' ? 'rejected' : 'pending') + '">' + escH(r.status) + '</span></td>'
+          + '<td>' + escH(r.detail || '') + '</td></tr>').join('')
+          || '<tr><td colspan="4" style="text-align:center;padding:18px">Nothing sent yet.</td></tr>';
+        host.innerHTML = h + '</tbody>';
+      } catch (e) { }
+    }
+
+    function closeMailEditor() {
+      const e = document.getElementById('mailEditor'), l = document.getElementById('mailList');
+      if (e) e.style.display = 'none'; if (l) l.style.display = 'block'; MAIL_EDIT = null;
+    }
+    function openMailEditor(id) {
+      const s2 = id ? SCHEDULES.find(x => x.id === id) : null;
+      MAIL_EDIT = s2 ? s2.id : null;
+      const sel = s2 ? (s2.report_types || []) : [];
+      const rec = s2 ? (s2.recipients || []) : [];
+      const dys = s2 ? (s2.days || []).map(String) : ['1','2','3','4','5'];
+      const users = (ADM_USERS || []).filter(u => u.status === 'approved');
+      const reportBoxes = Object.entries(REPORTS).map(([rid, pr]) =>
+        '<label class="mail-chk"><input type="checkbox" class="ms-rep" value="' + rid + '"'
+        + (sel.indexOf(rid) !== -1 ? ' checked' : '') + '><span>' + escH(pr.meta.name) + '</span></label>').join('');
+      const userBoxes = users.map(u =>
+        '<label class="mail-chk' + (u.email ? '' : ' no-mail') + '"><input type="checkbox" class="ms-usr" value="' + escH(u.user_id) + '"'
+        + (rec.indexOf(u.user_id) !== -1 ? ' checked' : '') + (u.email ? '' : ' disabled') + '>'
+        + '<span>' + escH(u.name) + '<i>' + (u.email ? escH(u.email) : 'no email on file') + '</i></span></label>').join('');
+      const dayBoxes = DAYS.map(d =>
+        '<label class="mail-day"><input type="checkbox" class="ms-day" value="' + d[0] + '"'
+        + (dys.indexOf(d[0]) !== -1 ? ' checked' : '') + '><span>' + d[1] + '</span></label>').join('');
+
+      document.getElementById('mailEditor').innerHTML =
+        '<div class="mail-head"><button class="btn btn-line" onclick="closeMailEditor()">\u2190 Back</button>'
+        + '<h3>' + (s2 ? 'Edit schedule' : 'New schedule') + '</h3></div>'
+        + '<div class="mail-form">'
+        + '<label class="mail-lbl">Title <span>shown as the email subject</span></label>'
+        + '<input id="mTitle" class="mail-in" placeholder="Daily P&amp;M report update" value="' + escH(s2 ? s2.title : '') + '">'
+        + '<label class="mail-lbl">Description <span>appears in the body of the email</span></label>'
+        + '<textarea id="mDesc" class="mail-in" rows="3" placeholder="The latest rental data has been uploaded to the portal.">' + escH(s2 ? (s2.description || '') : '') + '</textarea>'
+        + '<label class="mail-lbl">Reports <span>which reports this alert covers</span></label>'
+        + '<div class="mail-grid">' + reportBoxes + '</div>'
+        + '<label class="mail-lbl">Recipients <span>only approved users with an email can be selected</span></label>'
+        + '<div class="mail-grid users">' + userBoxes + '</div>'
+        + '<div class="mail-row">'
+        + '<div><label class="mail-lbl">Send at <span>IST, 24-hour</span></label>'
+        + '<input id="mTime" type="time" class="mail-in short" value="' + escH(s2 ? s2.send_time : '09:00') + '"></div>'
+        + '<div><label class="mail-lbl">On days</label><div class="mail-days">' + dayBoxes + '</div></div>'
+        + '</div>'
+        + '<label class="mail-chk big"><input type="checkbox" id="mOn"' + ((!s2 || s2.enabled) ? ' checked' : '') + '><span>Schedule active</span></label>'
+        + '<div class="mail-actions"><span class="mail-msg" id="mMsg"></span>'
+        + '<button class="btn btn-primary" id="mSave">Save schedule</button></div></div>';
+      document.getElementById('mailList').style.display = 'none';
+      document.getElementById('mailEditor').style.display = 'block';
+      document.getElementById('mSave').onclick = saveSchedule;
+    }
+
+    async function saveSchedule() {
+      const g = id => document.getElementById(id);
+      const reports = [...document.querySelectorAll('.ms-rep:checked')].map(x => x.value);
+      const users = [...document.querySelectorAll('.ms-usr:checked')].map(x => x.value);
+      const days = [...document.querySelectorAll('.ms-day:checked')].map(x => Number(x.value));
+      const msg = g('mMsg'); msg.className = 'mail-msg';
+      const btn = g('mSave'); btn.disabled = true; btn.textContent = 'Saving\u2026';
+      try {
+        const d = await rpc('admin_save_schedule', {
+          p_token: USER.token, p_id: MAIL_EDIT, p_title: g('mTitle').value,
+          p_report_types: reports, p_recipients: users,
+          p_description: g('mDesc').value, p_send_time: g('mTime').value,
+          p_days: days, p_enabled: g('mOn').checked
+        });
+        if (!d.ok) { msg.textContent = d.error || 'Could not save.'; msg.className = 'mail-msg err'; }
+        else { msg.textContent = '\u2713 Saved.'; msg.className = 'mail-msg ok'; await loadSchedules(); setTimeout(closeMailEditor, 500); }
+      } catch (e) { msg.textContent = 'Save failed: ' + (e.message || e); msg.className = 'mail-msg err'; }
+      btn.disabled = false; btn.textContent = 'Save schedule';
+    }
+
+    async function toggleSchedule(id) {
+      const s2 = SCHEDULES.find(x => x.id === id); if (!s2) return;
+      try {
+        await rpc('admin_save_schedule', {
+          p_token: USER.token, p_id: id, p_title: s2.title, p_report_types: s2.report_types,
+          p_recipients: s2.recipients, p_description: s2.description, p_send_time: s2.send_time,
+          p_days: s2.days, p_enabled: !s2.enabled
+        });
+        loadSchedules();
+      } catch (e) { alert('Could not update: ' + (e.message || e)); }
+    }
+    async function deleteSchedule(id) {
+      const s2 = SCHEDULES.find(x => x.id === id);
+      if (!confirm('Delete the schedule "' + (s2 ? s2.title : id) + '"?')) return;
+      try { await rpc('admin_delete_schedule', { p_token: USER.token, p_id: id }); loadSchedules(); }
+      catch (e) { alert('Could not delete: ' + (e.message || e)); }
+    }
+    async function sendTest(id) {
+      const to = prompt('Send a test of this alert to which email address?', (USER && USER.email) || '');
+      if (!to) return;
+      try {
+        const r = await fetch('/api/send-report-email', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ schedule_id: id, test_to: to.trim() })
+        });
+        const d = await r.json().catch(() => null);
+        if (d && d.ok) alert('Test sent to ' + to + '.');
+        else alert('Test failed: ' + ((d && (d.error || d.detail)) || 'no response from the mail endpoint.'));
+      } catch (e) { alert('Test failed: ' + (e.message || e) + '\n\nThis only works on the deployed Vercel site with the mail environment variables set.'); }
+    }
+
     /* ---- Role Rights (RBAC) ---- */
     function renderRights() {
       const q = (document.getElementById('admRightsSearch').value || '').toLowerCase();
@@ -6551,7 +6723,7 @@
       const ad = $('ftrAddr'); if (ad) ad.textContent = COMPANY.address;
       $('ftrYear').textContent = new Date().getFullYear();
       const ver = $('ftrVer'); if (ver) ver.textContent = 'Version ' + APP_VERSION;
-      const upd = $('ftrUpd'); if (upd) upd.textContent = 'Updated on 30 July 2026';
+      const upd = $('ftrUpd'); if (upd) upd.textContent = 'Updated on 01 July 2026';
     }
 
     /* ----- wire-up ----- */
@@ -6589,6 +6761,8 @@
       document.body.classList.remove('more-open');
       if (navMore) navMore.setAttribute('aria-expanded', 'false');
     });
+    const mailNewBtn = document.getElementById('mailNew');
+    if (mailNewBtn) mailNewBtn.onclick = () => openMailEditor(null);
     document.getElementById('btnSettings').onclick = () => openSettings('account');
     document.getElementById('setClose').onclick = closeSettings;
     document.getElementById('upSettings').onclick = () => openSettings('account');
@@ -8146,6 +8320,72 @@
 
     body[data-theme="dark"] .rep-actions .btn { background: var(--surf2); color: var(--ink); border-color: var(--line); }
     body[data-theme="dark"] .rep-actions .btn:hover:not(:disabled) { background: var(--surf3); }
+  </style>
+  <style>
+    /* users without an email cannot receive report notifications */
+    .no-email { color: #a15c00; font-weight: 600; font-size: 11.5px; white-space: nowrap; }
+    body[data-theme="dark"] .no-email { color: #ffd888; }
+  </style>
+  <style>
+    /* ===================== EMAIL ALERTS (admin) ===================== */
+    .mail-top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; }
+    .mail-hint { font-size: 12px; font-weight: 600; color: #a15c00; }
+    .mail-h6 { font-size: 11.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+      color: var(--muted); margin: 24px 0 10px; }
+    .mail-sub { font-size: 11px; color: var(--hint); margin-top: 2px; }
+
+    .mail-head { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
+    .mail-head h3 { margin: 0; font-size: 17px; color: var(--ink); }
+    .mail-form { max-width: 760px; }
+    .mail-lbl { display: block; font-size: 11.5px; font-weight: 800; letter-spacing: .06em;
+      text-transform: uppercase; color: var(--muted); margin: 16px 0 7px; }
+    .mail-lbl span { font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--hint); margin-left: 7px; }
+    .mail-in { width: 100%; padding: 10px 13px; font: inherit; font-size: 13.5px; color: var(--ink);
+      background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+    .mail-in:focus { outline: none; border-color: var(--steel); box-shadow: 0 0 0 3px rgba(47,109,176,.16); }
+    .mail-in.short { width: 150px; }
+    textarea.mail-in { resize: vertical; line-height: 1.5; }
+
+    .mail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(228px, 1fr)); gap: 9px; }
+    .mail-grid.users { grid-template-columns: repeat(auto-fill, minmax(252px, 1fr)); max-height: 260px; overflow: auto;
+      padding: 4px; border: 1px solid var(--line); border-radius: 11px; }
+    .mail-chk { display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer;
+      border: 1.5px solid var(--line); border-radius: 10px; background: var(--surface);
+      transition: border-color .15s ease, background .15s ease; }
+    .mail-chk:hover { border-color: #b9d2f2; }
+    .mail-chk:has(input:checked) { border-color: var(--steel); background: var(--sky); }
+    .mail-chk input { width: 17px; height: 17px; accent-color: var(--steel); flex: none; }
+    .mail-chk span { font-size: 13px; font-weight: 600; color: var(--ink); min-width: 0; }
+    .mail-chk span i { display: block; font-style: normal; font-size: 11px; font-weight: 500;
+      color: var(--hint); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .mail-chk.no-mail { opacity: .55; cursor: not-allowed; }
+    .mail-chk.no-mail span i { color: #a15c00; }
+    .mail-chk.big { display: inline-flex; margin-top: 18px; }
+
+    .mail-row { display: flex; gap: 30px; flex-wrap: wrap; align-items: flex-start; }
+    .mail-days { display: flex; gap: 6px; flex-wrap: wrap; }
+    .mail-day { cursor: pointer; }
+    .mail-day input { display: none; }
+    .mail-day span { display: grid; place-items: center; min-width: 44px; padding: 8px 6px;
+      font-size: 12px; font-weight: 700; color: var(--muted); background: var(--surface);
+      border: 1.5px solid var(--line); border-radius: 9px; transition: all .15s ease; }
+    .mail-day input:checked + span { color: #fff; border-color: var(--steel);
+      background: linear-gradient(135deg, var(--steel), var(--navy2)); }
+
+    .mail-actions { display: flex; align-items: center; justify-content: flex-end; gap: 14px;
+      margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--line); }
+    .mail-msg { font-size: 13px; font-weight: 600; }
+    .mail-msg.ok { color: #0a7d54; }
+    .mail-msg.err { color: #c0392b; }
+
+    body[data-theme="dark"] .mail-in,
+    body[data-theme="dark"] .mail-chk,
+    body[data-theme="dark"] .mail-day span { background: var(--surf2); color: var(--ink); border-color: var(--line); }
+    body[data-theme="dark"] .mail-chk:has(input:checked) { background: #1c3149; border-color: var(--steel); }
+    body[data-theme="dark"] .mail-grid.users { border-color: var(--line); }
+    body[data-theme="dark"] .mail-msg.ok { color: #6fe3b5; }
+    body[data-theme="dark"] .mail-msg.err { color: #ff9b93; }
+    body[data-theme="dark"] .mail-hint { color: #ffd888; }
   </style>
 </body>
 

@@ -543,3 +543,308 @@ grant execute on function public.login_user(text,text)               to anon, au
 grant execute on function public.whoami(uuid)                          to anon, authenticated;
 grant execute on function public.admin_list_users(uuid)                to anon, authenticated;
 grant execute on function public.admin_set_report_access(uuid,text,jsonb) to anon, authenticated;
+
+-- ============================================================================
+-- EMAIL ADDRESSES  — prerequisite for the report notification system
+--   app_users had no email column, so no user could be contacted.
+--   Safe + idempotent: re-run this block on an existing database.
+-- ============================================================================
+alter table public.app_users add column if not exists email text;
+
+-- optional but recommended: stop two accounts sharing one address
+create unique index if not exists app_users_email_uniq
+  on public.app_users (lower(email)) where email is not null and email <> '';
+
+-- login_user now also returns email
+create or replace function public.login_user(p_user_id text, p_password text)
+returns json language plpgsql security definer set search_path = public, extensions as $$
+declare v record; v_token uuid;
+begin
+  p_user_id := lower(trim(p_user_id));
+  select * into v from public.app_users where user_id=p_user_id;
+  if v.id is null then return json_build_object('ok',false,'error','Invalid User ID or password.'); end if;
+  if v.locked_until is not null and v.locked_until > now() then
+    return json_build_object('ok',false,'error','Account locked due to failed attempts. Try again later or contact an administrator.'); end if;
+  if v.password_hash <> crypt(p_password, v.password_hash) then
+    update public.app_users set failed_attempts = failed_attempts+1,
+      locked_until = case when failed_attempts+1 >= 5 then now() + interval '15 minutes' else locked_until end
+      where id=v.id;
+    perform public.log_activity(v.user_id,v.name,'login_failed', 'attempt '||(v.failed_attempts+1));
+    return json_build_object('ok',false,'error','Invalid User ID or password.');
+  end if;
+  if v.status='pending'  then return json_build_object('ok',false,'error','Your account is awaiting administrator approval.'); end if;
+  if v.status='rejected' then return json_build_object('ok',false,'error','Your registration was rejected. Please contact an administrator.'); end if;
+  if v.status='disabled' then return json_build_object('ok',false,'error','Your account has been disabled. Please contact an administrator.'); end if;
+  v_token := gen_random_uuid();
+  update public.app_users set session_token=v_token, failed_attempts=0, locked_until=null, last_login=now() where id=v.id;
+  perform public.log_activity(v.user_id,v.name,'login', null);
+  return json_build_object('ok',true,'name',v.name,'user_id',v.user_id,'token',v_token,'role',v.role,
+                           'status',v.status,'dept',v.dept,'report_access',v.report_access,
+                           'email',v.email,'last_login',v.last_login,'created_at',v.created_at);
+end; $$;
+
+-- whoami now also returns email / last_login / created_at (fills the profile panel)
+create or replace function public.whoami(p_token uuid)
+returns json language plpgsql security definer set search_path = public as $$
+declare v record;
+begin
+  select * into v from public.app_users where session_token=p_token;
+  if v.id is null then return json_build_object('ok',false); end if;
+  if v.status <> 'approved' then return json_build_object('ok',false); end if;
+  return json_build_object('ok',true,'name',v.name,'user_id',v.user_id,'role',v.role,'status',v.status,
+                           'dept',v.dept,'report_access',v.report_access,
+                           'email',v.email,'last_login',v.last_login,'created_at',v.created_at);
+end; $$;
+
+-- admin_list_users now also returns email
+create or replace function public.admin_list_users(p_token uuid)
+returns json language plpgsql security definer set search_path = public as $$
+declare a record; r json;
+begin
+  a := public._admin(p_token); if a.id is null then return json_build_object('ok',false,'error','Admin only.'); end if;
+  select coalesce(json_agg(t order by t.created_at desc),'[]') into r from (
+    select id,name,user_id,role,status,dept,email,failed_attempts,locked_until,last_login,created_at,approved_by,approved_at,report_access
+    from public.app_users) t;
+  return json_build_object('ok',true,'rows',r);
+end; $$;
+
+-- admin-only: set / clear a user's email address
+create or replace function public.admin_set_email(p_token uuid, p_user_id text, p_email text)
+returns json language plpgsql security definer set search_path = public as $$
+declare a record; v_email text;
+begin
+  a := public._admin(p_token); if a.id is null then return json_build_object('ok',false,'error','Admin only.'); end if;
+  v_email := nullif(lower(trim(coalesce(p_email,''))),'');
+  if v_email is not null and v_email !~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$' then
+    return json_build_object('ok',false,'error','That does not look like a valid email address.');
+  end if;
+  if v_email is not null and exists (
+      select 1 from public.app_users where lower(email)=v_email and user_id <> lower(trim(p_user_id))) then
+    return json_build_object('ok',false,'error','That email is already used by another account.');
+  end if;
+  update public.app_users set email = v_email where user_id = lower(trim(p_user_id));
+  if not found then return json_build_object('ok',false,'error','No such user.'); end if;
+  perform public.log_activity(a.user_id,a.name,'set_email', p_user_id||' -> '||coalesce(v_email,'(cleared)'));
+  return json_build_object('ok',true);
+end; $$;
+
+grant execute on function public.login_user(text,text)                to anon, authenticated;
+grant execute on function public.whoami(uuid)                          to anon, authenticated;
+grant execute on function public.admin_list_users(uuid)                to anon, authenticated;
+grant execute on function public.admin_set_email(uuid,text,text)       to anon, authenticated;
+
+-- ============================================================================
+-- REPORT EMAIL NOTIFICATIONS
+--   Admin builds a schedule: which report, which users, what time, what text.
+--   pg_cron wakes every 5 minutes, finds anything due, and calls the Vercel
+--   endpoint (which sends through Resend). Safe + idempotent to re-run.
+-- ============================================================================
+
+create table if not exists public.email_schedules (
+  id           uuid primary key default gen_random_uuid(),
+  title        text not null,
+  report_types jsonb not null default '[]'::jsonb,   -- ["rental","sales"]
+  recipients   jsonb not null default '[]'::jsonb,   -- ["harshal","sandeep"] (app_users.user_id)
+  description  text,
+  send_time    text not null default '09:00',        -- 'HH:MM' in IST
+  days         jsonb not null default '[1,2,3,4,5]'::jsonb, -- 0=Sun … 6=Sat
+  enabled      boolean not null default true,
+  last_sent_at timestamptz,
+  last_status  text,
+  created_by   text,
+  created_at   timestamptz default now()
+);
+
+create table if not exists public.email_log (
+  id          uuid primary key default gen_random_uuid(),
+  schedule_id uuid,
+  title       text,
+  recipients  jsonb,
+  report_types jsonb,
+  status      text,                                   -- 'sent' | 'failed' | 'skipped'
+  detail      text,
+  sent_at     timestamptz default now()
+);
+create index if not exists email_log_sent_idx on public.email_log (sent_at desc);
+
+alter table public.email_schedules enable row level security;
+alter table public.email_log       enable row level security;
+
+-- ---------- admin RPCs ----------
+create or replace function public.admin_list_schedules(p_token uuid)
+returns json language plpgsql security definer set search_path = public as $$
+declare a record; r json;
+begin
+  a := public._admin(p_token); if a.id is null then return json_build_object('ok',false,'error','Admin only.'); end if;
+  select coalesce(json_agg(t order by t.created_at desc),'[]') into r from public.email_schedules t;
+  return json_build_object('ok',true,'rows',r);
+end; $$;
+
+create or replace function public.admin_save_schedule(
+  p_token uuid, p_id uuid, p_title text, p_report_types jsonb, p_recipients jsonb,
+  p_description text, p_send_time text, p_days jsonb, p_enabled boolean)
+returns json language plpgsql security definer set search_path = public as $$
+declare a record; v_id uuid;
+begin
+  a := public._admin(p_token); if a.id is null then return json_build_object('ok',false,'error','Admin only.'); end if;
+  if coalesce(trim(p_title),'') = '' then return json_build_object('ok',false,'error','Give the schedule a title.'); end if;
+  if p_send_time !~ '^([01][0-9]|2[0-3]):[0-5][0-9]$' then
+    return json_build_object('ok',false,'error','Time must be in HH:MM (24-hour) format.'); end if;
+  if jsonb_array_length(coalesce(p_report_types,'[]'::jsonb)) = 0 then
+    return json_build_object('ok',false,'error','Select at least one report.'); end if;
+  if jsonb_array_length(coalesce(p_recipients,'[]'::jsonb)) = 0 then
+    return json_build_object('ok',false,'error','Select at least one recipient.'); end if;
+
+  if p_id is null then
+    insert into public.email_schedules (title,report_types,recipients,description,send_time,days,enabled,created_by)
+    values (trim(p_title),p_report_types,p_recipients,p_description,p_send_time,coalesce(p_days,'[1,2,3,4,5]'::jsonb),coalesce(p_enabled,true),a.user_id)
+    returning id into v_id;
+  else
+    update public.email_schedules
+       set title=trim(p_title), report_types=p_report_types, recipients=p_recipients,
+           description=p_description, send_time=p_send_time,
+           days=coalesce(p_days,'[1,2,3,4,5]'::jsonb), enabled=coalesce(p_enabled,true)
+     where id=p_id returning id into v_id;
+    if v_id is null then return json_build_object('ok',false,'error','Schedule not found.'); end if;
+  end if;
+  perform public.log_activity(a.user_id,a.name,'email_schedule', trim(p_title));
+  return json_build_object('ok',true,'id',v_id);
+end; $$;
+
+create or replace function public.admin_delete_schedule(p_token uuid, p_id uuid)
+returns json language plpgsql security definer set search_path = public as $$
+declare a record;
+begin
+  a := public._admin(p_token); if a.id is null then return json_build_object('ok',false,'error','Admin only.'); end if;
+  delete from public.email_schedules where id=p_id;
+  perform public.log_activity(a.user_id,a.name,'email_schedule', 'deleted '||p_id::text);
+  return json_build_object('ok',true);
+end; $$;
+
+create or replace function public.admin_email_log(p_token uuid, p_limit int default 100)
+returns json language plpgsql security definer set search_path = public as $$
+declare a record; r json;
+begin
+  a := public._admin(p_token); if a.id is null then return json_build_object('ok',false,'error','Admin only.'); end if;
+  select coalesce(json_agg(t order by t.sent_at desc),'[]') into r
+    from (select * from public.email_log order by sent_at desc limit coalesce(p_limit,100)) t;
+  return json_build_object('ok',true,'rows',r);
+end; $$;
+
+-- Resolve a schedule into a ready-to-send payload (recipients + report freshness).
+-- Used by the sender endpoint; also powers "Send test now".
+create or replace function public.email_payload(p_token uuid, p_id uuid)
+returns json language plpgsql security definer set search_path = public as $$
+declare a record; s record; r json; rep json;
+begin
+  a := public._admin(p_token); if a.id is null then return json_build_object('ok',false,'error','Admin only.'); end if;
+  select * into s from public.email_schedules where id=p_id;
+  if s.id is null then return json_build_object('ok',false,'error','Schedule not found.'); end if;
+
+  -- recipients that actually have an email on file
+  select coalesce(json_agg(json_build_object('name',u.name,'user_id',u.user_id,'email',u.email)),'[]') into r
+    from public.app_users u
+   where u.user_id in (select jsonb_array_elements_text(s.recipients))
+     and u.email is not null and u.email <> '' and u.status='approved';
+
+  -- latest upload per selected report -> "report updated" timestamp
+  select coalesce(json_agg(json_build_object('report_type',x.report_type,'file_name',x.file_name,
+                                             'row_count',x.row_count,'uploaded_at',x.uploaded_at,
+                                             'uploaded_by',x.uploaded_by)),'[]') into rep
+    from (select distinct on (report_type) report_type,file_name,row_count,uploaded_at,uploaded_by
+            from public.uploads
+           where report_type in (select jsonb_array_elements_text(s.report_types))
+           order by report_type, uploaded_at desc) x;
+
+  return json_build_object('ok',true,'schedule',row_to_json(s),'recipients',r,'reports',rep);
+end; $$;
+
+create or replace function public.email_mark_sent(p_id uuid, p_status text, p_detail text)
+returns void language plpgsql security definer set search_path = public as $$
+declare s record;
+begin
+  select * into s from public.email_schedules where id=p_id;
+  update public.email_schedules set last_sent_at=now(), last_status=p_status where id=p_id;
+  insert into public.email_log (schedule_id,title,recipients,report_types,status,detail)
+  values (p_id, s.title, s.recipients, s.report_types, p_status, p_detail);
+end; $$;
+
+grant execute on function public.admin_list_schedules(uuid)                              to anon, authenticated;
+grant execute on function public.admin_save_schedule(uuid,uuid,text,jsonb,jsonb,text,text,jsonb,boolean) to anon, authenticated;
+grant execute on function public.admin_delete_schedule(uuid,uuid)                        to anon, authenticated;
+grant execute on function public.admin_email_log(uuid,int)                               to anon, authenticated;
+grant execute on function public.email_payload(uuid,uuid)                                to anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- SCHEDULER  (pg_cron + pg_net)
+-- Run ONCE, after setting the two settings below to your own values.
+-- Everything above works without this; this is only the automatic trigger.
+-- ---------------------------------------------------------------------------
+create extension if not exists pg_cron;
+create extension if not exists pg_net;
+
+-- Where to POST, and the shared secret the endpoint checks.
+-- Replace both, then run this block.
+--   alter database postgres set app.mail_endpoint = 'https://your-app.vercel.app/api/send-report-email';
+--   alter database postgres set app.mail_secret   = 'a-long-random-string';
+
+create or replace function public.email_dispatch_due()
+returns void language plpgsql security definer set search_path = public, extensions as $$
+declare s record; v_now timestamptz := now() at time zone 'Asia/Kolkata';
+        v_url text; v_secret text;
+begin
+  v_url    := current_setting('app.mail_endpoint', true);
+  v_secret := current_setting('app.mail_secret', true);
+  if v_url is null then return; end if;
+
+  for s in
+    select * from public.email_schedules
+     where enabled
+       -- today is a selected weekday
+       and (days ? extract(dow from v_now)::text)
+       -- the scheduled minute has arrived (within the last 5 min window).
+       -- Compared as minutes-since-midnight so a 23:5x schedule cannot wrap past
+       -- midnight and silently never fire.
+       and (
+         (extract(hour from v_now)::int * 60 + extract(minute from v_now)::int)
+         - (split_part(send_time,':',1)::int * 60 + split_part(send_time,':',2)::int)
+       ) between 0 and 4
+       -- and it has not already gone out today
+       and (last_sent_at is null
+            or (last_sent_at at time zone 'Asia/Kolkata')::date < v_now::date)
+  loop
+    perform net.http_post(
+      url     := v_url,
+      headers := jsonb_build_object('Content-Type','application/json','x-mail-secret',v_secret),
+      body    := jsonb_build_object('schedule_id', s.id)
+    );
+    -- marked immediately so a slow response cannot double-send in the next tick
+    update public.email_schedules set last_sent_at = now(), last_status = 'queued' where id = s.id;
+  end loop;
+end; $$;
+
+-- every 5 minutes
+select cron.unschedule('report-email-dispatch')
+  where exists (select 1 from cron.job where jobname = 'report-email-dispatch');
+select cron.schedule('report-email-dispatch', '*/5 * * * *', $cron$ select public.email_dispatch_due(); $cron$);
+
+-- the sender endpoint calls this with the service key to fetch a payload without a user token
+create or replace function public.email_payload_svc(p_id uuid)
+returns json language plpgsql security definer set search_path = public as $$
+declare s record; r json; rep json;
+begin
+  select * into s from public.email_schedules where id=p_id;
+  if s.id is null then return json_build_object('ok',false,'error','Schedule not found.'); end if;
+  select coalesce(json_agg(json_build_object('name',u.name,'user_id',u.user_id,'email',u.email)),'[]') into r
+    from public.app_users u
+   where u.user_id in (select jsonb_array_elements_text(s.recipients))
+     and u.email is not null and u.email <> '' and u.status='approved';
+  select coalesce(json_agg(json_build_object('report_type',x.report_type,'file_name',x.file_name,
+                                             'row_count',x.row_count,'uploaded_at',x.uploaded_at,
+                                             'uploaded_by',x.uploaded_by)),'[]') into rep
+    from (select distinct on (report_type) report_type,file_name,row_count,uploaded_at,uploaded_by
+            from public.uploads
+           where report_type in (select jsonb_array_elements_text(s.report_types))
+           order by report_type, uploaded_at desc) x;
+  return json_build_object('ok',true,'schedule',row_to_json(s),'recipients',r,'reports',rep);
+end; $$;
