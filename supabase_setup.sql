@@ -783,25 +783,37 @@ grant execute on function public.email_payload(uuid,uuid)                       
 create extension if not exists pg_cron;
 create extension if not exists pg_net;
 
--- Where to POST, and the shared secret the endpoint checks.
--- Replace both, then run this block.
---   alter database postgres set app.mail_endpoint = 'https://your-app.vercel.app/api/send-report-email';
---   alter database postgres set app.mail_secret   = 'a-long-random-string';
+-- Config lives in a table: hosted Supabase does not allow `alter database ... set`
+-- (the SQL Editor runs as a non-superuser). RLS keeps it readable only by the
+-- service role. Set your own values here, then run this block.
+create table if not exists public.app_config (
+  key   text primary key,
+  value text not null
+);
+alter table public.app_config enable row level security;
+
+insert into public.app_config (key, value) values
+  ('mail_endpoint', 'https://your-app.vercel.app/api/send-report-email'),
+  ('mail_secret',   'a-long-random-string-matching-MAIL_SECRET')
+on conflict (key) do update set value = excluded.value;
 
 create or replace function public.email_dispatch_due()
 returns void language plpgsql security definer set search_path = public, extensions as $$
 declare s record; v_now timestamptz := now() at time zone 'Asia/Kolkata';
         v_url text; v_secret text;
 begin
-  v_url    := current_setting('app.mail_endpoint', true);
-  v_secret := current_setting('app.mail_secret', true);
+  select value into v_url    from public.app_config where key = 'mail_endpoint';
+  select value into v_secret from public.app_config where key = 'mail_secret';
   if v_url is null then return; end if;
 
   for s in
     select * from public.email_schedules
      where enabled
-       -- today is a selected weekday
-       and (days ? extract(dow from v_now)::text)
+       -- today is a selected weekday. Compared numerically: the admin UI stores
+       -- days as JSON numbers ([1,2,3]), and `?` only matches STRING keys, so
+       -- `days ? '6'` was false even when 6 was present and nothing ever fired.
+       and exists (select 1 from jsonb_array_elements_text(days) d
+                    where d::int = extract(dow from v_now)::int)
        -- the scheduled minute has arrived (within the last 5 min window).
        -- Compared as minutes-since-midnight so a 23:5x schedule cannot wrap past
        -- midnight and silently never fire.

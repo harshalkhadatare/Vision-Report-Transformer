@@ -3163,6 +3163,28 @@
     let SCHEDULES = [], MAIL_EDIT = null;
     const DAYS = [['0','Sun'],['1','Mon'],['2','Tue'],['3','Wed'],['4','Thu'],['5','Fri'],['6','Sat']];
 
+    // Answers “why hasn’t it sent yet?” — the send window is only 5 minutes wide,
+    // so a time earlier today has already passed and waits for the next selected day.
+    function nextRunLabel(s2) {
+      if (!s2.enabled) return 'paused';
+      const days = (s2.days || []).map(Number);
+      if (!days.length) return 'no days selected';
+      const p = String(s2.send_time || '00:00').split(':');
+      const mins = (+p[0]) * 60 + (+p[1]);
+      // current time in IST regardless of the viewer’s timezone
+      const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+      const nowMins = ist.getHours() * 60 + ist.getMinutes();
+      const NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      for (let i = 0; i < 8; i++) {
+        const d = (ist.getDay() + i) % 7;
+        if (days.indexOf(d) === -1) continue;
+        if (i === 0 && nowMins > mins + 4) continue;   // window already closed today
+        if (i === 0) return nowMins >= mins ? 'sending now' : 'next: today ' + s2.send_time;
+        return 'next: ' + NAMES[d] + ' ' + s2.send_time;
+      }
+      return 'next: \u2014';
+    }
+
     async function loadSchedules() {
       try {
         const d = await rpc('admin_list_schedules', { p_token: USER.token });
@@ -3184,11 +3206,13 @@
         const rts = (s2.report_types || []).map(r => (REPORTS[r] && REPORTS[r].meta) ? REPORTS[r].meta.name : r);
         const days = (s2.days || []).map(d => (DAYS.find(x => x[0] === String(d)) || [,d])[1]).join(', ');
         const last = s2.last_sent_at ? fmtWhen(s2.last_sent_at) : 'never';
+        const nxt = nextRunLabel(s2);
         const badge = s2.enabled ? '<span class="pill approved">On</span>' : '<span class="pill pending">Paused</span>';
         return '<tr><td><b>' + escH(s2.title) + '</b></td>'
           + '<td>' + escH(rts.join(', ')) + '</td>'
           + '<td>' + (s2.recipients || []).length + '</td>'
-          + '<td>' + escH(s2.send_time) + '<div class="mail-sub">' + escH(days) + '</div></td>'
+          + '<td>' + escH(s2.send_time) + '<div class="mail-sub">' + escH(days) + '</div>'
+          + '<div class="mail-next">' + escH(nxt) + '</div></td>'
           + '<td>' + badge + '<div class="mail-sub">last: ' + escH(last) + (s2.last_status ? ' (' + escH(s2.last_status) + ')' : '') + '</div></td>'
           + '<td><button class="abtn bl" onclick="openMailEditor(\'' + s2.id + '\')">Edit</button>'
           + '<button class="abtn ok" onclick="sendTest(\'' + s2.id + '\')">Send test</button>'
@@ -3304,9 +3328,18 @@
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ schedule_id: id, test_to: to.trim() })
         });
-        const d = await r.json().catch(() => null);
-        if (d && d.ok) alert('Test sent to ' + to + '.');
-        else alert('Test failed: ' + ((d && (d.error || d.detail)) || 'no response from the mail endpoint.'));
+        // a 401/500 can come back with an empty body, so read text first and only
+        // then try to parse — otherwise this threw 'Unexpected end of JSON input'.
+        const raw = await r.text();
+        let d = null; try { d = raw ? JSON.parse(raw) : null; } catch (e) { }
+        if (d && d.ok) { alert('Test sent to ' + to + '.'); loadSchedules(); }
+        else {
+          const why = (d && (d.error || d.detail))
+            || (r.status === 401 ? 'The mail endpoint rejected the request (MAIL_SECRET mismatch between Vercel and the database).'
+            : r.status === 404 ? 'The mail endpoint was not found — is api/send-report-email.js deployed?'
+            : 'HTTP ' + r.status + (raw ? ' · ' + raw.slice(0, 120) : ' · empty response'));
+          alert('Test failed: ' + why);
+        }
       } catch (e) { alert('Test failed: ' + (e.message || e) + '\n\nThis only works on the deployed Vercel site with the mail environment variables set.'); }
     }
 
@@ -8386,6 +8419,10 @@
     body[data-theme="dark"] .mail-msg.ok { color: #6fe3b5; }
     body[data-theme="dark"] .mail-msg.err { color: #ff9b93; }
     body[data-theme="dark"] .mail-hint { color: #ffd888; }
+  </style>
+  <style>
+    .mail-next { font-size: 10.5px; font-weight: 700; color: #0a7d54; margin-top: 3px; }
+    body[data-theme="dark"] .mail-next { color: #6fe3b5; }
   </style>
 </body>
 

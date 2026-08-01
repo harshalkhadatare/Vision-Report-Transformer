@@ -41,82 +41,144 @@ function fmtIST(v) {
 }
 
 function buildHtml({ recipientName, title, description, reports, portalUrl }) {
-  const rows = (reports || []).map(r => `
+  const logo = portalUrl.replace(/\/$/, '') + '/images/logo.png';
+  const F = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif";
+
+  const rows = (reports || []).map((r, i) => `
     <tr>
-      <td style="padding:13px 16px;border-bottom:1px solid #e6ecf3;">
-        <div style="font:600 14px/1.35 Segoe UI,Arial,sans-serif;color:#12314f;">
-          ${esc(REPORT_NAMES[r.report_type] || r.report_type)}
-        </div>
-        <div style="font:400 12px/1.5 Segoe UI,Arial,sans-serif;color:#63788f;margin-top:3px;">
-          ${esc(r.file_name || '')}${r.row_count ? ' &middot; ' + Number(r.row_count).toLocaleString('en-IN') + ' rows' : ''}
-        </div>
-      </td>
-      <td style="padding:13px 16px;border-bottom:1px solid #e6ecf3;text-align:right;white-space:nowrap;">
-        <div style="font:400 11px/1.4 Segoe UI,Arial,sans-serif;color:#8496a9;">Updated</div>
-        <div style="font:600 12.5px/1.4 Segoe UI,Arial,sans-serif;color:#12314f;">${esc(fmtIST(r.uploaded_at))}</div>
-        ${r.uploaded_by ? `<div style="font:400 11px/1.4 Segoe UI,Arial,sans-serif;color:#8496a9;">by ${esc(r.uploaded_by)}</div>` : ''}
+      <td style="padding:0 0 10px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+               style="border:1px solid #e3eaf2;border-radius:10px;background:#ffffff;">
+          <tr>
+            <td width="4" style="background:#2f6db0;border-radius:10px 0 0 10px;font-size:0;line-height:0;">&nbsp;</td>
+            <td style="padding:14px 16px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="font:600 14.5px/1.35 ${F};color:#12314f;padding-bottom:4px;">
+                    ${esc(REPORT_NAMES[r.report_type] || r.report_type)}
+                  </td>
+                  <td align="right" style="font:400 11px/1.3 ${F};color:#8496a9;padding-bottom:4px;white-space:nowrap;">
+                    UPDATED
+                  </td>
+                </tr>
+                <tr>
+                  <td style="font:400 12px/1.5 ${F};color:#63788f;">
+                    ${esc(r.file_name || '')}${r.row_count ? ' &nbsp;&middot;&nbsp; ' + Number(r.row_count).toLocaleString('en-IN') + ' rows' : ''}
+                  </td>
+                  <td align="right" style="font:600 12.5px/1.5 ${F};color:#12314f;white-space:nowrap;">
+                    ${esc(fmtIST(r.uploaded_at))}
+                  </td>
+                </tr>
+                ${r.uploaded_by ? `<tr>
+                  <td colspan="2" align="right" style="font:400 11px/1.5 ${F};color:#8496a9;">
+                    uploaded by ${esc(r.uploaded_by)}
+                  </td></tr>` : ''}
+              </table>
+            </td>
+          </tr>
+        </table>
       </td>
     </tr>`).join('');
 
   const noReports = `
-    <tr><td colspan="2" style="padding:16px;font:400 13px/1.5 Segoe UI,Arial,sans-serif;color:#8496a9;">
+    <tr><td style="padding:16px;border:1px dashed #d6e0ec;border-radius:10px;
+        font:400 13px/1.5 ${F};color:#8496a9;text-align:center;">
       No uploads found yet for the selected reports.
     </td></tr>`;
 
   return `<!doctype html>
-<html><body style="margin:0;padding:0;background:#eef2f7;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef2f7;padding:26px 12px;">
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light only"><title>${esc(title)}</title></head>
+<body style="margin:0;padding:0;background:#eef2f7;-webkit-font-smoothing:antialiased;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">
+    ${esc(title)} &mdash; ${(reports || []).length} report(s) updated in the VIESL Report Analyzer.
+  </div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef2f7;padding:28px 12px;">
     <tr><td align="center">
-      <table role="presentation" width="600" cellpadding="0" cellspacing="0"
-             style="max-width:600px;width:100%;background:#ffffff;border-radius:14px;overflow:hidden;
-                    box-shadow:0 2px 6px rgba(16,40,70,.08),0 12px 34px rgba(16,40,70,.10);">
+      <table role="presentation" width="620" cellpadding="0" cellspacing="0"
+             style="max-width:620px;width:100%;background:#ffffff;border-radius:16px;overflow:hidden;
+                    box-shadow:0 1px 3px rgba(16,40,70,.07),0 14px 38px rgba(16,40,70,.11);">
 
-        <tr><td style="background:linear-gradient(135deg,#16456c,#0e2a43);padding:22px 26px;">
-          <div style="font:700 17px/1.3 Segoe UI,Arial,sans-serif;color:#ffffff;">
-            Vision Infra Equipment Solutions Ltd
-          </div>
-          <div style="font:400 12.5px/1.4 Segoe UI,Arial,sans-serif;color:#a8c4dd;margin-top:3px;">
-            Report Analyzer &middot; automated notification
-          </div>
+        <!-- brand bar -->
+        <tr><td style="background:#0e2a43;background-image:linear-gradient(135deg,#16456c 0%,#0e2a43 100%);padding:22px 28px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+            <tr>
+              <td width="52" valign="middle" style="padding-right:14px;">
+                <table role="presentation" cellpadding="0" cellspacing="0"
+                       style="background:#ffffff;border-radius:11px;">
+                  <tr><td align="center" valign="middle" style="width:52px;height:52px;padding:6px;">
+                    <img src="${esc(logo)}" alt="VIESL" width="40"
+                         style="display:block;width:40px;height:auto;border:0;">
+                  </td></tr>
+                </table>
+              </td>
+              <td valign="middle">
+                <div style="font:700 16.5px/1.3 ${F};color:#ffffff;letter-spacing:-.2px;">
+                  Vision Infra Equipment Solutions Ltd
+                </div>
+                <div style="font:400 12px/1.45 ${F};color:#9fc0dd;margin-top:3px;letter-spacing:.03em;">
+                  REPORT ANALYZER &nbsp;&middot;&nbsp; AUTOMATED NOTIFICATION
+                </div>
+              </td>
+            </tr>
+          </table>
         </td></tr>
 
-        <tr><td style="padding:26px 26px 6px;">
-          <div style="font:400 14px/1.5 Segoe UI,Arial,sans-serif;color:#12314f;">
-            Hi ${esc(recipientName || 'there')},
-          </div>
-          <div style="font:700 19px/1.35 Segoe UI,Arial,sans-serif;color:#0e2a43;margin:12px 0 8px;">
+        <!-- accent rule -->
+        <tr><td style="height:3px;font-size:0;line-height:0;
+            background:linear-gradient(90deg,#2f6db0 0%,#22b573 55%,#f0a500 100%);">&nbsp;</td></tr>
+
+        <!-- greeting + title -->
+        <tr><td style="padding:30px 28px 0;">
+          <div style="font:400 14px/1.5 ${F};color:#63788f;">Hi ${esc(recipientName || 'there')},</div>
+          <div style="font:700 21px/1.35 ${F};color:#0e2a43;margin:10px 0 0;letter-spacing:-.3px;">
             ${esc(title)}
           </div>
-          ${description ? `<div style="font:400 14px/1.6 Segoe UI,Arial,sans-serif;color:#44586e;margin-bottom:6px;">
+          ${description ? `<div style="font:400 14px/1.65 ${F};color:#44586e;margin-top:10px;">
             ${esc(description).replace(/\n/g, '<br>')}
           </div>` : ''}
         </td></tr>
 
-        <tr><td style="padding:14px 26px 4px;">
-          <div style="font:700 11px/1 Segoe UI,Arial,sans-serif;color:#8496a9;letter-spacing:.08em;
-                      text-transform:uppercase;margin-bottom:9px;">Reports</div>
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
-                 style="border:1px solid #e6ecf3;border-radius:10px;overflow:hidden;">
+        <!-- reports -->
+        <tr><td style="padding:24px 28px 0;">
+          <div style="font:700 10.5px/1 ${F};color:#8496a9;letter-spacing:.11em;
+                      text-transform:uppercase;padding-bottom:11px;">
+            Reports in this update
+          </div>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
             ${rows || noReports}
           </table>
         </td></tr>
 
-        <tr><td style="padding:22px 26px 4px;" align="center">
-          <a href="${esc(portalUrl)}"
-             style="display:inline-block;background:#12885a;color:#ffffff;text-decoration:none;
-                    font:700 14px/1 Segoe UI,Arial,sans-serif;padding:14px 30px;border-radius:9px;">
-            Open Report Analyzer &rarr;
-          </a>
-          <div style="font:400 11.5px/1.5 Segoe UI,Arial,sans-serif;color:#8496a9;margin-top:11px;">
-            Sign in with your usual credentials to view and export the full report.
+        <!-- CTA -->
+        <tr><td align="center" style="padding:14px 28px 4px;">
+          <table role="presentation" cellpadding="0" cellspacing="0">
+            <tr><td align="center" style="background:#12885a;border-radius:10px;">
+              <a href="${esc(portalUrl)}"
+                 style="display:inline-block;padding:15px 34px;font:700 14.5px/1 ${F};
+                        color:#ffffff;text-decoration:none;letter-spacing:.01em;">
+                Open Report Analyzer &nbsp;&rarr;
+              </a>
+            </td></tr>
+          </table>
+          <div style="font:400 11.5px/1.55 ${F};color:#8496a9;margin-top:12px;">
+            Sign in with your usual credentials to view, filter and export the full report.
           </div>
         </td></tr>
 
-        <tr><td style="padding:20px 26px 24px;">
-          <div style="border-top:1px solid #e6ecf3;padding-top:14px;
-                      font:400 11.5px/1.6 Segoe UI,Arial,sans-serif;color:#8496a9;">
-            Sent automatically by the VIESL Report Analyzer on ${esc(fmtIST(new Date()))} (IST).<br>
-            You are receiving this because an administrator added you to this report schedule.
+        <!-- footer -->
+        <tr><td style="padding:24px 28px 26px;">
+          <div style="border-top:1px solid #e6ecf3;padding-top:16px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+              <tr><td style="font:400 11.5px/1.65 ${F};color:#8496a9;">
+                Sent automatically on ${esc(fmtIST(new Date()))} IST.<br>
+                You are receiving this because an administrator added you to this report schedule.
+              </td></tr>
+              <tr><td style="padding-top:12px;font:400 11px/1.6 ${F};color:#a8b6c4;">
+                Vision Infra Equipment Solutions Ltd &nbsp;&middot;&nbsp; 4th floor, International Business Bay,<br>
+                Gurunanak Nagar, Pune 411042, Maharashtra, India
+              </td></tr>
+            </table>
           </div>
         </td></tr>
 
