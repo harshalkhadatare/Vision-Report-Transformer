@@ -1217,3 +1217,168 @@ select cron.schedule('outbox-dispatch', '* * * * *', $cron$ select public.outbox
 
 grant execute on function public.register_user(text,text,text,text,text) to anon, authenticated;
 grant execute on function public.admin_set_status(uuid,text,text)         to anon, authenticated;
+
+-- ============================================================================
+-- SHARE LINKS  —  "management" schedules: open a report without logging in
+--
+--   A schedule flagged share_access gets a one-per-recipient token embedded in
+--   its email. Opening that link renders the report read-only: filters, charts
+--   and exports work; upload, admin and other reports do not.
+--
+--   A token is a BEARER credential — whoever holds the URL has access, including
+--   anyone the mail is forwarded to. Hence: scoped to ONE report, expires after
+--   7 days, revocable, and every open is recorded.
+--   Idempotent.
+-- ============================================================================
+alter table public.email_schedules
+  add column if not exists share_access boolean not null default false;
+
+create table if not exists public.share_tokens (
+  token         uuid primary key default gen_random_uuid(),
+  schedule_id   uuid,
+  report_type   text not null,
+  storage_path  text,
+  file_name     text,
+  recipient     text,                      -- app_users.user_id (audit only)
+  recipient_email text,
+  created_at    timestamptz default now(),
+  expires_at    timestamptz not null default (now() + interval '7 days'),
+  revoked       boolean not null default false,
+  opens         int not null default 0,
+  last_opened_at timestamptz,
+  last_ip       text
+);
+create index if not exists share_tokens_active_idx on public.share_tokens (expires_at, revoked);
+alter table public.share_tokens enable row level security;
+
+-- called by the mail function (service key) as it builds each recipient's email
+create or replace function public.share_token_issue(
+  p_schedule_id uuid, p_report_type text, p_recipient text, p_recipient_email text)
+returns json language plpgsql security definer set search_path = public as $$
+declare v_tok uuid; up record;
+begin
+  select file_name, storage_path into up
+    from public.uploads
+   where report_type = p_report_type and storage_path is not null
+   order by uploaded_at desc limit 1;
+  if up.storage_path is null then
+    return json_build_object('ok',false,'error','No stored file for this report.'); end if;
+
+  insert into public.share_tokens (schedule_id,report_type,storage_path,file_name,recipient,recipient_email)
+  values (p_schedule_id,p_report_type,up.storage_path,up.file_name,p_recipient,p_recipient_email)
+  returning token into v_tok;
+  return json_build_object('ok',true,'token',v_tok);
+end; $$;
+
+-- PUBLIC: the share page calls this with no session. Returns only what is needed
+-- to render one report, and records the access.
+create or replace function public.share_resolve(p_token uuid, p_ip text default null)
+returns json language plpgsql security definer set search_path = public as $$
+declare t record; nm text;
+begin
+  select * into t from public.share_tokens where token = p_token;
+  if t.token is null then
+    return json_build_object('ok',false,'error','This link is not valid.'); end if;
+  if t.revoked then
+    return json_build_object('ok',false,'error','This link has been revoked by an administrator.'); end if;
+  if t.expires_at < now() then
+    return json_build_object('ok',false,'error','This link has expired. Please ask for a fresh report email.'); end if;
+
+  update public.share_tokens
+     set opens = opens + 1, last_opened_at = now(), last_ip = coalesce(p_ip, last_ip)
+   where token = p_token;
+
+  insert into public.activity_log (user_id, name, action, detail)
+  values (coalesce(t.recipient,'(share)'), coalesce(t.recipient_email,'share link'),
+          'share_open', t.report_type);
+
+  return json_build_object('ok',true,
+    'report_type', t.report_type,
+    'storage_path', t.storage_path,
+    'file_name', t.file_name,
+    'expires_at', t.expires_at,
+    'recipient', t.recipient_email);
+end; $$;
+
+-- admin: see and kill active links
+create or replace function public.admin_list_shares(p_token uuid)
+returns json language plpgsql security definer set search_path = public as $$
+declare a record; r json;
+begin
+  a := public._admin(p_token); if a.id is null then return json_build_object('ok',false,'error','Admin only.'); end if;
+  select coalesce(json_agg(t order by t.created_at desc),'[]') into r
+    from (select token,report_type,file_name,recipient,recipient_email,created_at,
+                 expires_at,revoked,opens,last_opened_at
+            from public.share_tokens
+           order by created_at desc limit 200) t;
+  return json_build_object('ok',true,'rows',r);
+end; $$;
+
+create or replace function public.admin_revoke_share(p_token uuid, p_share uuid)
+returns json language plpgsql security definer set search_path = public as $$
+declare a record;
+begin
+  a := public._admin(p_token); if a.id is null then return json_build_object('ok',false,'error','Admin only.'); end if;
+  if p_share is null then
+    update public.share_tokens set revoked = true where revoked = false and expires_at > now();
+    perform public.log_activity(a.user_id,a.name,'share_revoke','ALL active links');
+  else
+    update public.share_tokens set revoked = true where token = p_share;
+    perform public.log_activity(a.user_id,a.name,'share_revoke',p_share::text);
+  end if;
+  return json_build_object('ok',true);
+end; $$;
+
+-- keep the schedule save able to carry the flag
+create or replace function public.admin_save_schedule(
+  p_token uuid, p_id uuid, p_title text, p_report_types jsonb, p_recipients jsonb,
+  p_description text, p_send_time text, p_days jsonb, p_enabled boolean,
+  p_subject_mode text default 'custom', p_share_access boolean default false)
+returns json language plpgsql security definer set search_path = public as $$
+declare a record; v_id uuid; v_mode text;
+begin
+  a := public._admin(p_token); if a.id is null then return json_build_object('ok',false,'error','Admin only.'); end if;
+  v_mode := coalesce(nullif(trim(p_subject_mode),''),'custom');
+  if v_mode not in ('report_date','custom','all_summary') then v_mode := 'custom'; end if;
+  if v_mode = 'custom' and coalesce(trim(p_title),'') = '' then
+    return json_build_object('ok',false,'error','Enter a subject, or choose one of the generated options.'); end if;
+  if p_send_time !~ '^([01][0-9]|2[0-3]):[0-5][0-9]$' then
+    return json_build_object('ok',false,'error','Time must be in HH:MM (24-hour) format.'); end if;
+  if jsonb_array_length(coalesce(p_report_types,'[]'::jsonb)) = 0 then
+    return json_build_object('ok',false,'error','Select at least one report.'); end if;
+  if jsonb_array_length(coalesce(p_recipients,'[]'::jsonb)) = 0 then
+    return json_build_object('ok',false,'error','Select at least one recipient.'); end if;
+
+  if p_id is null then
+    insert into public.email_schedules (title,report_types,recipients,description,send_time,days,enabled,created_by,subject_mode,share_access)
+    values (coalesce(trim(p_title),''),p_report_types,p_recipients,p_description,p_send_time,
+            coalesce(p_days,'[1,2,3,4,5]'::jsonb),coalesce(p_enabled,true),a.user_id,v_mode,coalesce(p_share_access,false))
+    returning id into v_id;
+  else
+    update public.email_schedules
+       set title=coalesce(trim(p_title),''), report_types=p_report_types, recipients=p_recipients,
+           description=p_description, send_time=p_send_time,
+           days=coalesce(p_days,'[1,2,3,4,5]'::jsonb), enabled=coalesce(p_enabled,true),
+           subject_mode=v_mode, share_access=coalesce(p_share_access,false)
+     where id=p_id returning id into v_id;
+    if v_id is null then return json_build_object('ok',false,'error','Schedule not found.'); end if;
+  end if;
+  perform public.log_activity(a.user_id,a.name,'email_schedule', coalesce(trim(p_title),v_mode));
+  return json_build_object('ok',true,'id',v_id);
+end; $$;
+
+-- nightly tidy: drop tokens that expired over a month ago
+create or replace function public.share_tokens_prune()
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  delete from public.share_tokens where expires_at < now() - interval '30 days';
+end; $$;
+
+select cron.unschedule('share-token-prune')
+  where exists (select 1 from cron.job where jobname = 'share-token-prune');
+select cron.schedule('share-token-prune', '20 18 * * *', $cron$ select public.share_tokens_prune(); $cron$);
+
+grant execute on function public.share_resolve(uuid,text)                          to anon, authenticated;
+grant execute on function public.admin_list_shares(uuid)                           to anon, authenticated;
+grant execute on function public.admin_revoke_share(uuid,uuid)                     to anon, authenticated;
+grant execute on function public.admin_save_schedule(uuid,uuid,text,jsonb,jsonb,text,text,jsonb,boolean,text,boolean) to anon, authenticated;

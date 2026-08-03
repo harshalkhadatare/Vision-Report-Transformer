@@ -2005,6 +2005,7 @@
           </span>
           <button class="btn btn-ghost" id="btnAdmin" style="display:none" title="Admin dashboard">Admin</button>
           <button class="btn btn-ghost" id="btnSettings" title="Settings"> Settings</button>
+          <span class="share-badge" title="Read-only shared view">&#128065; <span>Read-only view</span></span>
           <button class="userchip" type="button" id="userChip" title="Your account"></button>
         </div>
       </div>
@@ -3214,7 +3215,8 @@
         const badge = s2.enabled ? '<span class="pill approved">On</span>' : '<span class="pill pending">Paused</span>';
         const shownSubj = composeSubject(s2.subject_mode || 'custom', s2.title, s2.report_types || []);
         return '<tr><td><b>' + escH(shownSubj) + '</b>'
-          + (s2.subject_mode && s2.subject_mode !== 'custom' ? '<div class="mail-sub">auto-generated subject</div>' : '') + '</td>'
+          + (s2.subject_mode && s2.subject_mode !== 'custom' ? '<div class="mail-sub">auto-generated subject</div>' : '')
+          + (s2.share_access ? '<div class="share-tag">\uD83D\uDC51 Management \u00b7 no-login link</div>' : '') + '</td>'
           + '<td>' + escH(rts.join(', ')) + '</td>'
           + '<td>' + (s2.recipients || []).length + '</td>'
           + '<td>' + escH(s2.send_time) + '<div class="mail-sub">' + escH(days) + '</div>'
@@ -3291,6 +3293,11 @@
         + '<input id="mTime" type="time" class="mail-in short" value="' + escH(s2 ? s2.send_time : '09:00') + '"></div>'
         + '<div><label class="mail-lbl">On days</label><div class="mail-days">' + dayBoxes + '</div></div>'
         + '</div>'
+        + '<label class="mail-lbl">Recipient type</label>'
+        + '<label class="mail-chk share-opt"><input type="checkbox" id="mShare"' + ((s2 && s2.share_access) ? ' checked' : '') + '>'
+        + '<span>\uD83D\uDC51 Management \u2014 allow access without login'
+        + '<i>Each recipient gets a personal link that opens the report directly: filters and'
+        + ' Excel / PDF / CSV downloads work, no password needed. Expires in 7 days and can be revoked.</i></span></label>'
         + '<label class="mail-chk big"><input type="checkbox" id="mOn"' + ((!s2 || s2.enabled) ? ' checked' : '') + '><span>Schedule active</span></label>'
         + '<div class="mail-actions"><span class="mail-msg" id="mMsg"></span>'
         + '<button class="btn btn-primary" id="mSave">Save schedule</button></div></div>';
@@ -3352,7 +3359,8 @@
           p_report_types: reports, p_recipients: users,
           p_description: g('mDesc').value, p_send_time: g('mTime').value,
           p_days: days, p_enabled: g('mOn').checked,
-          p_subject_mode: (g('mSubjMode') || {}).value || 'custom'
+          p_subject_mode: (g('mSubjMode') || {}).value || 'custom',
+          p_share_access: !!(g('mShare') || {}).checked
         });
         if (!d.ok) { msg.textContent = d.error || 'Could not save.'; msg.className = 'mail-msg err'; }
         else { msg.textContent = '\u2713 Saved.'; msg.className = 'mail-msg ok'; await loadSchedules(); setTimeout(closeMailEditor, 500); }
@@ -3366,7 +3374,8 @@
         await rpc('admin_save_schedule', {
           p_token: USER.token, p_id: id, p_title: s2.title, p_report_types: s2.report_types,
           p_recipients: s2.recipients, p_description: s2.description, p_send_time: s2.send_time,
-          p_days: s2.days, p_enabled: !s2.enabled, p_subject_mode: s2.subject_mode || 'custom'
+          p_days: s2.days, p_enabled: !s2.enabled, p_subject_mode: s2.subject_mode || 'custom',
+          p_share_access: !!s2.share_access
         });
         loadSchedules();
       } catch (e) { alert('Could not update: ' + (e.message || e)); }
@@ -3908,7 +3917,83 @@
       const av = document.getElementById('adminView'); if (av) av.style.display = 'none';
       CURRENT = null; PROC = null; showAuth(); document.getElementById('liPass').value = '';
     }
+    /* ===================== SHARE MODE (open without logging in) =====================
+       A schedule flagged “management” emails a one-per-recipient token. Landing on
+       ?share=<token> skips auth entirely and renders that ONE report read-only:
+       filters, charts and exports work — upload, admin and other reports do not.
+       The token is a bearer credential, so it is scoped, expiring and revocable.
+    ============================================================================== */
+    function shareTokenFromUrl() {
+      try {
+        const q = new URLSearchParams(location.search);
+        const t = q.get('share') || q.get('t');
+        return (t && /^[0-9a-f-]{36}$/i.test(t)) ? t : null;
+      } catch (e) { return null; }
+    }
+
+    function shareFail(msg) {
+      document.body.classList.remove('share-mode');
+      hideLoad();
+      const host = document.getElementById('shareErr');
+      if (host) {
+        document.getElementById('shareErrMsg').textContent = msg;
+        host.style.display = 'flex';
+      } else { alert(msg); }
+    }
+
+    async function initShare(tok) {
+      document.body.classList.add('share-mode');
+      document.getElementById('authView').style.display = 'none';
+      showLoad('Opening your report\u2026');
+      try {
+        if (!SB) throw new Error('Portal is not configured.');
+        const { data, error } = await SB.rpc('share_resolve', { p_token: tok });
+        if (error) throw error;
+        if (!data || !data.ok) { shareFail((data && data.error) || 'This link is not valid.'); return; }
+
+        const proc = REPORTS[data.report_type];
+        if (!proc) { shareFail('This report is no longer available.'); return; }
+
+        // read-only guest: no account, but the shell still needs a USER shape
+        USER = { name: data.recipient || 'Guest', user_id: '(shared)', role: 'guest',
+                 reports: [data.report_type], share: true };
+
+        const res = await fetch(publicUrl(data.storage_path));
+        if (!res.ok) throw new Error('The report file could not be loaded.');
+        const buf = await res.arrayBuffer();
+        const wb = XLSX.read(buf, { type: 'array', cellDates: true, dense: true, WTF: false });
+
+        CURRENT = data.report_type; PROC = proc;
+        const { rows, note } = proc.process(wb);
+        if (!rows.length) throw new Error('No data rows in this file.');
+        RAW = rows; sortKey = null; msState = {};
+        window.__lastFileName = data.file_name || null;
+
+        document.getElementById('appRoot').style.display = 'block';
+        document.getElementById('brandSub').textContent = proc.meta.name;
+        const cn = document.getElementById('chosenName'); if (cn) cn.textContent = proc.meta.name;
+        document.getElementById('selectView').style.display = 'none';
+        document.getElementById('uploadView').style.display = 'none';
+        document.getElementById('dashView').style.display = 'block';
+        document.body.classList.add('in-report');
+        buildFilters(); applyFilters();
+        ['btnCsv', 'btnPdf', 'btnXlsx'].forEach(id => { const b = document.getElementById(id); if (b) b.disabled = false; });
+
+        const exp = data.expires_at ? new Date(data.expires_at) : null;
+        setMsg('<b>' + proc.meta.name + '</b> \u2014 ' + note
+          + '<br><span style="opacity:.75">Shared read-only view'
+          + (exp ? ' \u00b7 link valid until ' + exp.toLocaleDateString('en-GB',
+              { day: '2-digit', month: 'short', year: 'numeric' }) : '')
+          + ' \u00b7 filters and downloads are enabled.</span>', 'ok');
+        hideLoad();
+      } catch (e) {
+        shareFail(e.message || String(e));
+      }
+    }
+
     async function initAuth() {
+      const _shareTok = shareTokenFromUrl();
+      if (_shareTok) { initShare(_shareTok); return; }
       USER = getSession();
       if (USER && USER.token && SB) {
         try {
@@ -8548,6 +8633,47 @@
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .sp-val.muted { font-weight: 500; color: var(--hint); font-style: italic; }
     body[data-theme="dark"] .subj-prev { background: var(--surf2); border-color: var(--line); border-left-color: var(--steel); }
+  </style>
+  <!-- ===================== SHARE LINK ERROR ===================== -->
+  <div id="shareErr" class="overlay" style="display:none">
+    <div class="ov-card" style="max-width:430px">
+      <div class="ov-head" style="background:linear-gradient(135deg,#b3261e,#7a1a15)"><b>Link unavailable</b></div>
+      <div style="padding:28px 24px;text-align:center">
+        <div style="font-size:42px;line-height:1;margin-bottom:14px">&#128274;</div>
+        <h3 style="margin:0 0 9px;color:var(--ink)">This report link cannot be opened</h3>
+        <p id="shareErrMsg" style="color:var(--muted);font-size:13.5px;line-height:1.6;margin:0 0 20px"></p>
+        <a href="/" class="btn btn-primary" style="text-decoration:none">Go to the portal</a>
+      </div>
+    </div>
+  </div>
+
+  <style>
+    /* ---- share mode: a read-only, no-login view of one report ---- */
+    body.share-mode .rep-actions #btnReset,
+    body.share-mode #btnAdmin,
+    body.share-mode #btnSettings,
+    body.share-mode #userChip,
+    body.share-mode .crumbs,
+    body.share-mode #wsQuick,
+    body.share-mode .hary-fab,
+    body.share-mode .hary-panel { display: none !important; }
+    body.share-mode .share-badge { display: inline-flex; }
+    .share-badge { display: none; align-items: center; gap: 6px; margin-left: 10px;
+      padding: 5px 12px; border-radius: 20px; font-size: 11.5px; font-weight: 700;
+      color: #eafff3; background: rgba(34,181,115,.22);
+      box-shadow: inset 0 0 0 1px rgba(34,181,115,.45); white-space: nowrap; }
+    @media (max-width: 640px) { .share-badge span { display: none; } }
+  </style>
+  <style>
+    .share-opt { align-items: flex-start; margin-top: 4px; }
+    .share-opt input { margin-top: 2px; }
+    .share-opt span i { display: block; font-style: normal; font-size: 11px; font-weight: 500;
+      color: var(--hint); margin-top: 3px; line-height: 1.5; white-space: normal; }
+    .share-opt:has(input:checked) { border-color: #e0a500; background: #fff8e6; }
+    body[data-theme="dark"] .share-opt:has(input:checked) { border-color: #e0a500; background: #33290f; }
+    .share-tag { display: inline-block; margin-top: 4px; font-size: 10px; font-weight: 800;
+      color: #8a6200; background: #fff3cd; padding: 2px 8px; border-radius: 20px; }
+    body[data-theme="dark"] .share-tag { color: #ffd888; background: #3a2f12; }
   </style>
 </body>
 

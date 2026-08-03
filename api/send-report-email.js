@@ -170,7 +170,7 @@ function chartBlock(ch, idx, F) {
   </table>`;
 }
 
-function buildHtml({ recipientName, title, description, reports, portalUrl }) {
+function buildHtml({ recipientName, title, description, reports, portalUrl, shareUrl }) {
   const logo = portalUrl.replace(/\/$/, '') + '/images/logo.png';
   const F = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif";
 
@@ -324,15 +324,18 @@ function buildHtml({ recipientName, title, description, reports, portalUrl }) {
         <tr><td align="center" style="padding:14px 28px 4px;">
           <table role="presentation" cellpadding="0" cellspacing="0">
             <tr><td align="center" style="background:#12885a;border-radius:10px;">
-              <a href="${esc(portalUrl)}"
+              <a href="${esc(shareUrl || portalUrl)}"
                  style="display:inline-block;padding:15px 34px;font:700 14.5px/1 ${F};
                         color:#ffffff;text-decoration:none;letter-spacing:.01em;">
-                Open Report Analyzer &nbsp;&rarr;
+                ${shareUrl ? 'View Report &nbsp;&mdash;&nbsp; no login needed' : 'Open Report Analyzer'} &nbsp;&rarr;
               </a>
             </td></tr>
           </table>
           <div style="font:400 11.5px/1.55 ${F};color:#8496a9;margin-top:12px;">
-            Sign in with your usual credentials to view, filter and export the full report.
+            ${shareUrl
+              ? 'Opens instantly on any device. Filter and download Excel, PDF or CSV \u2014 no password required.<br>'
+                + '<span style="color:#a8b6c4;">This link is personal to you and expires in 7 days.</span>'
+              : 'Sign in with your usual credentials to view, filter and export the full report.'}
           </div>
         </td></tr>
 
@@ -539,10 +542,26 @@ module.exports = async (req, res) => {
     const portal = PORTAL_URL || 'https://vision-report-transformer.vercel.app';
 
     let sent = 0; const failures = [];
+    // "management" schedules: mint a personal, expiring, revocable link per recipient
+    const wantShare = !!sch.share_access;
     for (const p of recipients) {
+      let shareUrl = null;
+      if (wantShare && reports.length) {
+        try {
+          const tk = await sb('share_token_issue', {
+            p_schedule_id: scheduleId,
+            p_report_type: reports[0].report_type,   // link opens the first report
+            p_recipient: p.user_id,
+            p_recipient_email: p.email
+          });
+          if (tk && tk.ok && tk.token) {
+            shareUrl = portal.replace(/\/$/, '') + '/?share=' + tk.token;
+          }
+        } catch (e) { /* fall back to the normal login link */ }
+      }
       const html = buildHtml({
         recipientName: p.name, title: sch.title, description: sch.description,
-        reports, portalUrl: portal
+        reports, portalUrl: portal, shareUrl
       });
       const r = await sendOne({
         to: p.email, from, html,
@@ -553,7 +572,7 @@ module.exports = async (req, res) => {
     try { if (_tx) _tx.close(); } catch (e) { }   // release the SMTP pool before the lambda freezes
 
     const status = failures.length === 0 ? 'sent' : (sent > 0 ? 'partial' : 'failed');
-    const detail = '[' + (hasGmail ? 'gmail' : 'resend') + '] ' + sent + ' sent' + (failures.length ? ' \u00b7 ' + failures.length + ' failed \u00b7 ' + failures[0] : '');
+    const detail = '[' + (hasGmail ? 'gmail' : 'resend') + (sch.share_access ? ' \u00b7 share' : '') + '] ' + sent + ' sent' + (failures.length ? ' \u00b7 ' + failures.length + ' failed \u00b7 ' + failures[0] : '');
     // logging must never turn a successful send into a 'failed' row
     if (!testTo) { try { await sb('email_mark_sent', { p_id: scheduleId, p_status: status, p_detail: detail }); } catch (_) { } }
     logged = true;
