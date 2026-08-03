@@ -792,10 +792,14 @@ create table if not exists public.app_config (
 );
 alter table public.app_config enable row level security;
 
+-- `do nothing`, NOT `do update`: re-running this file must never overwrite the
+-- live endpoint/secret with these placeholders. Seed values are inserted only on
+-- a fresh install. To change them later, UPDATE the row explicitly:
+--   update public.app_config set value = '<real value>' where key = 'mail_endpoint';
 insert into public.app_config (key, value) values
   ('mail_endpoint', 'https://your-app.vercel.app/api/send-report-email'),
   ('mail_secret',   'a-long-random-string-matching-MAIL_SECRET')
-on conflict (key) do update set value = excluded.value;
+on conflict (key) do nothing;
 
 create or replace function public.email_dispatch_due()
 returns void language plpgsql security definer set search_path = public, extensions as $$
@@ -911,3 +915,92 @@ begin
 end; $$;
 
 grant execute on function public.admin_save_schedule(uuid,uuid,text,jsonb,jsonb,text,text,jsonb,boolean,text) to anon, authenticated;
+
+-- ============================================================================
+-- DISPATCHER v2 — retry failed sends, and never overlap two SMTP sends
+--
+--   Problem 1: last_sent_at was stamped the moment the request was DISPATCHED.
+--   If the endpoint 404'd, timed out, or the response was lost, the schedule
+--   still looked "sent today" and was skipped until tomorrow. Three sends were
+--   silently lost this way.
+--
+--   Problem 2: two schedules in the same/adjacent tick both opened a Gmail SMTP
+--   connection. The second one stalled and pg_net recorded a NULL response.
+--
+--   Fix: mark 'queued' WITHOUT touching last_sent_at (so a failure is retried on
+--   the next 5-min tick), and dispatch at most ONE schedule per tick.
+--   The retry window stays inside the schedule's own hour so it can't fire late
+--   at night; give up after 6 attempts (~30 minutes).
+-- ============================================================================
+alter table public.email_schedules add column if not exists attempts int not null default 0;
+
+create or replace function public.email_dispatch_due()
+returns void language plpgsql security definer set search_path = public, extensions as $$
+declare s record; v_now timestamptz := now() at time zone 'Asia/Kolkata';
+        v_url text; v_secret text; v_mins int;
+begin
+  select value into v_url    from public.app_config where key = 'mail_endpoint';
+  select value into v_secret from public.app_config where key = 'mail_secret';
+  if v_url is null or v_secret is null then return; end if;
+
+  v_mins := extract(hour from v_now)::int * 60 + extract(minute from v_now)::int;
+
+  -- ONE schedule per tick: a second concurrent Gmail SMTP send is what produced
+  -- the NULL responses. Anything else due is picked up 5 minutes later.
+  select * into s from public.email_schedules
+   where enabled
+     and exists (select 1 from jsonb_array_elements_text(days) d
+                  where d::int = extract(dow from v_now)::int)
+     -- window widened to 30 min so a failed attempt has room to be retried
+     and (v_mins - (split_part(send_time,':',1)::int * 60 + split_part(send_time,':',2)::int))
+         between 0 and 29
+     -- not already CONFIRMED sent today
+     and (last_sent_at is null
+          or (last_sent_at at time zone 'Asia/Kolkata')::date < v_now::date)
+     -- stop hammering a broken endpoint
+     and attempts < 6
+   order by send_time
+   limit 1;
+
+  if s.id is null then return; end if;
+
+  perform net.http_post(
+    url     := v_url,
+    headers := jsonb_build_object('Content-Type','application/json','x-mail-secret',v_secret),
+    body    := jsonb_build_object('schedule_id', s.id)
+  );
+
+  -- NOTE: last_sent_at is deliberately NOT set here. Only the endpoint sets it,
+  -- via email_mark_sent(), once the mail has actually gone out. If this attempt
+  -- fails, the row stays eligible and the next tick retries it.
+  update public.email_schedules
+     set last_status = 'queued', attempts = attempts + 1
+   where id = s.id;
+end; $$;
+
+-- reset the attempt counter whenever a send succeeds
+create or replace function public.email_mark_sent(p_id uuid, p_status text, p_detail text)
+returns void language plpgsql security definer set search_path = public as $$
+declare s record;
+begin
+  select * into s from public.email_schedules where id = p_id;
+  update public.email_schedules
+     set last_sent_at = now(),
+         last_status  = p_status,
+         attempts     = case when p_status in ('sent','partial','skipped') then 0 else attempts end
+   where id = p_id;
+  insert into public.email_log (schedule_id,title,recipients,report_types,status,detail)
+  values (p_id, s.title, s.recipients, s.report_types, p_status, p_detail);
+end; $$;
+
+-- clear yesterday's counters each morning so a retry budget starts fresh
+create or replace function public.email_reset_attempts()
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  update public.email_schedules set attempts = 0 where attempts > 0;
+end; $$;
+
+select cron.unschedule('report-email-reset')
+  where exists (select 1 from cron.job where jobname = 'report-email-reset');
+select cron.schedule('report-email-reset', '5 18 * * *',   -- 18:05 UTC = 23:35 IST
+  $cron$ select public.email_reset_attempts(); $cron$);
