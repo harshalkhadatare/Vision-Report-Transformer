@@ -1004,3 +1004,75 @@ select cron.unschedule('report-email-reset')
   where exists (select 1 from cron.job where jobname = 'report-email-reset');
 select cron.schedule('report-email-reset', '5 18 * * *',   -- 18:05 UTC = 23:35 IST
   $cron$ select public.email_reset_attempts(); $cron$);
+
+-- ============================================================================
+-- REPORT SNAPSHOTS  (KPIs + chart data for the email)
+--   Charts are computed in the BROWSER, so the mail function can never rebuild
+--   them. Instead the browser stores a snapshot each time a report is rendered,
+--   and the email reads the latest snapshot per report type.
+--   Idempotent.
+-- ============================================================================
+create table if not exists public.report_snapshots (
+  report_type text primary key,
+  kpis        jsonb not null default '[]'::jsonb,
+  charts      jsonb not null default '[]'::jsonb,
+  row_count   int,
+  file_name   text,
+  captured_by text,
+  captured_at timestamptz default now()
+);
+alter table public.report_snapshots enable row level security;
+
+-- called by the browser after a report renders
+create or replace function public.save_snapshot(
+  p_token uuid, p_report_type text, p_kpis jsonb, p_charts jsonb,
+  p_row_count int, p_file_name text)
+returns json language plpgsql security definer set search_path = public as $$
+declare v record;
+begin
+  select * into v from public.app_users where session_token = p_token;
+  if v.id is null or v.status <> 'approved' then
+    return json_build_object('ok',false,'error','Not authenticated.'); end if;
+  insert into public.report_snapshots (report_type,kpis,charts,row_count,file_name,captured_by,captured_at)
+  values (p_report_type, coalesce(p_kpis,'[]'::jsonb), coalesce(p_charts,'[]'::jsonb),
+          p_row_count, p_file_name, v.name, now())
+  on conflict (report_type) do update
+     set kpis = excluded.kpis, charts = excluded.charts, row_count = excluded.row_count,
+         file_name = excluded.file_name, captured_by = excluded.captured_by, captured_at = now();
+  return json_build_object('ok',true);
+end; $$;
+
+grant execute on function public.save_snapshot(uuid,text,jsonb,jsonb,int,text) to anon, authenticated;
+
+-- the mail payload now carries each selected report's snapshot, in the order the
+-- schedule lists them
+create or replace function public.email_payload_svc(p_id uuid)
+returns json language plpgsql security definer set search_path = public as $$
+declare s record; r json; rep json;
+begin
+  select * into s from public.email_schedules where id=p_id;
+  if s.id is null then return json_build_object('ok',false,'error','Schedule not found.'); end if;
+
+  select coalesce(json_agg(json_build_object('name',u.name,'user_id',u.user_id,'email',u.email)),'[]') into r
+    from public.app_users u
+   where u.user_id in (select jsonb_array_elements_text(s.recipients))
+     and u.email is not null and u.email <> '' and u.status='approved';
+
+  -- keep the schedule's own report order (ordinality), and attach the snapshot
+  select coalesce(json_agg(x order by x.ord),'[]') into rep from (
+    select t.ord,
+           t.rt                                   as report_type,
+           up.file_name, up.row_count, up.uploaded_at, up.uploaded_by,
+           coalesce(sn.kpis,   '[]'::jsonb)       as kpis,
+           coalesce(sn.charts, '[]'::jsonb)       as charts,
+           sn.captured_at
+      from jsonb_array_elements_text(s.report_types) with ordinality as t(rt, ord)
+      left join lateral (
+        select file_name,row_count,uploaded_at,uploaded_by
+          from public.uploads u2 where u2.report_type = t.rt
+         order by uploaded_at desc limit 1) up on true
+      left join public.report_snapshots sn on sn.report_type = t.rt
+  ) x;
+
+  return json_build_object('ok',true,'schedule',row_to_json(s),'recipients',r,'reports',rep);
+end; $$;

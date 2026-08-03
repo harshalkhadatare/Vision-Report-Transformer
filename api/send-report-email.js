@@ -89,11 +89,119 @@ function fmtIST(v) {
   }).replace(',', ',');
 }
 
+// ---- KPI grid: 3 per row, table-based so Outlook renders it ----
+function kpiGrid(kpis, F) {
+  if (!kpis || !kpis.length) return '';
+  const cells = kpis.slice(0, 9);
+  let rows = '';
+  for (let i = 0; i < cells.length; i += 3) {
+    const grp = cells.slice(i, i + 3);
+    rows += '<tr>' + grp.map(k => `
+      <td width="33%" valign="top" style="padding:4px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+               style="background:#ffffff;border:1px solid #e3eaf2;border-radius:9px;">
+          <tr><td style="padding:11px 12px;">
+            <div style="font:600 9.5px/1.2 ${F};color:#8496a9;letter-spacing:.06em;
+                        text-transform:uppercase;">${esc(k.label)}</div>
+            <div style="font:700 17px/1.25 ${F};color:#0e2a43;padding-top:4px;">${esc(k.value)}</div>
+            ${k.sub ? `<div style="font:400 10px/1.35 ${F};color:#8496a9;padding-top:2px;">${esc(k.sub)}</div>` : ''}
+          </td></tr>
+        </table>
+      </td>`).join('')
+      + (grp.length < 3 ? '<td width="33%">&nbsp;</td>'.repeat(3 - grp.length) : '')
+      + '</tr>';
+  }
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+                 style="margin:0 -4px 6px;">${rows}</table>`;
+}
+
+// ---- one chart as a labelled bar list (no images: bars are coloured table cells) ----
+const BAR_COLOURS = ['#2f6db0', '#1d9e75', '#e08a1e', '#7c5cbf', '#0891b2', '#d8504c', '#0a66c2', '#b45309'];
+function chartBlock(ch, idx, F) {
+  const ds = (ch.datasets || [])[0];
+  if (!ds || !ch.labels || !ch.labels.length) return '';
+  const pairs = ch.labels.map((l, i) => ({ l, v: Number(ds.data[i]) || 0 }))
+    .sort((a, b) => b.v - a.v).slice(0, 6);
+  const max = Math.max.apply(null, pairs.map(p => Math.abs(p.v)).concat([1]));
+  const col = BAR_COLOURS[idx % BAR_COLOURS.length];
+  const fmtV = v => Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+
+  const bars = pairs.map(p => {
+    const pct = Math.max(2, Math.round((Math.abs(p.v) / max) * 100));
+    return `
+    <tr>
+      <td width="42%" style="padding:5px 8px 5px 0;font:400 11.5px/1.35 ${F};color:#44586e;
+          overflow:hidden;white-space:nowrap;">${esc(p.l)}</td>
+      <td width="36%" style="padding:5px 0;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+               style="background:#eef2f7;border-radius:4px;">
+          <tr><td width="${pct}%" style="background:${col};height:9px;border-radius:4px;
+              font-size:0;line-height:0;">&nbsp;</td>
+              <td style="font-size:0;line-height:0;">&nbsp;</td></tr>
+        </table>
+      </td>
+      <td width="22%" align="right" style="padding:5px 0 5px 8px;
+          font:600 11.5px/1.35 ${F};color:#12314f;white-space:nowrap;">${fmtV(p.v)}</td>
+    </tr>`;
+  }).join('');
+
+  return `
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+         style="margin-bottom:12px;border:1px solid #e3eaf2;border-radius:10px;background:#ffffff;">
+    <tr><td style="padding:13px 15px 4px;">
+      <div style="font:600 12.5px/1.3 ${F};color:#12314f;">${esc(ch.title)}</div>
+      ${ch.sub ? `<div style="font:400 10.5px/1.4 ${F};color:#8496a9;padding-top:2px;">${esc(ch.sub)}</div>` : ''}
+    </td></tr>
+    <tr><td style="padding:6px 15px 13px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${bars}</table>
+      ${ch.labels.length > 6 ? `<div style="font:400 10px/1.4 ${F};color:#a8b6c4;padding-top:7px;">
+        Top 6 of ${ch.labels.length} &middot; full breakdown in the portal</div>` : ''}
+    </td></tr>
+  </table>`;
+}
+
 function buildHtml({ recipientName, title, description, reports, portalUrl }) {
   const logo = portalUrl.replace(/\/$/, '') + '/images/logo.png';
   const F = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif";
 
-  const rows = (reports || []).map((r, i) => `
+  // Each selected report gets its own section: header, KPIs, then its charts,
+  // in the order the schedule lists them.
+  const sections = (reports || []).map((r, ri) => {
+    const name = esc(REPORT_NAMES[r.report_type] || r.report_type);
+    const kpis = kpiGrid(r.kpis || [], F);
+    const charts = (r.charts || []).map((c, i) => chartBlock(c, i, F)).join('');
+    const stale = (!r.kpis || !r.kpis.length) && (!r.charts || !r.charts.length);
+    return `
+    <tr><td style="padding:0 28px 22px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+             style="border:1px solid #dde6f0;border-radius:12px;background:#f8fafc;">
+        <tr><td style="padding:15px 16px 12px;border-bottom:1px solid #e3eaf2;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+            <tr>
+              <td style="font:700 15px/1.3 ${F};color:#0e2a43;">
+                <span style="display:inline-block;background:#2f6db0;color:#ffffff;border-radius:4px;
+                    font:700 10px/1 ${F};padding:4px 7px;margin-right:8px;">${ri + 1}</span>${name}
+              </td>
+              <td align="right" style="font:400 10.5px/1.4 ${F};color:#8496a9;white-space:nowrap;">
+                ${r.uploaded_at ? 'Updated ' + esc(fmtIST(r.uploaded_at)) : 'No upload yet'}
+              </td>
+            </tr>
+            ${r.file_name ? `<tr><td colspan="2" style="font:400 11px/1.5 ${F};color:#8496a9;padding-top:3px;">
+              ${esc(r.file_name)}${r.row_count ? ' &middot; ' + Number(r.row_count).toLocaleString('en-IN') + ' rows' : ''}
+              ${r.uploaded_by ? ' &middot; by ' + esc(r.uploaded_by) : ''}</td></tr>` : ''}
+          </table>
+        </td></tr>
+        <tr><td style="padding:14px 16px 16px;">
+          ${stale
+            ? `<div style="font:400 12px/1.6 ${F};color:#8496a9;text-align:center;padding:10px;">
+                 Open this report in the portal once to include its dashboard figures here.</div>`
+            : kpis + charts}
+        </td></tr>
+      </table>
+    </td></tr>`;
+  }).join('');
+
+  const rowsUnused = (reports || []).map((r, i) => `
     <tr>
       <td style="padding:0 0 10px;">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
@@ -188,16 +296,18 @@ function buildHtml({ recipientName, title, description, reports, portalUrl }) {
           </div>` : ''}
         </td></tr>
 
-        <!-- reports -->
-        <tr><td style="padding:24px 28px 0;">
+        <!-- reports: one section each, dashboard figures inline -->
+        <tr><td style="padding:24px 28px 14px;">
           <div style="font:700 10.5px/1 ${F};color:#8496a9;letter-spacing:.11em;
-                      text-transform:uppercase;padding-bottom:11px;">
-            Reports in this update
+                      text-transform:uppercase;">
+            Dashboard summary &middot; ${(reports || []).length} report${(reports || []).length === 1 ? '' : 's'}
           </div>
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-            ${rows || noReports}
-          </table>
         </td></tr>
+        ${sections || `<tr><td style="padding:0 28px 20px;">
+          <div style="padding:16px;border:1px dashed #d6e0ec;border-radius:10px;
+              font:400 13px/1.5 ${F};color:#8496a9;text-align:center;">
+            No uploads found yet for the selected reports.
+          </div></td></tr>`}
 
         <!-- CTA -->
         <tr><td align="center" style="padding:14px 28px 4px;">

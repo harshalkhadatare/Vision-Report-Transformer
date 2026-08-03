@@ -3989,6 +3989,7 @@
           const { rows, note } = proc.process(wb);
           if (!rows.length) throw new Error('No data rows in this file.');
           RAW = rows; sortKey = null; msState = {}; buildFilters(); applyFilters();
+          try { window.__lastFileName = u.file_name || null; } catch (e) { }
           try { statsBumpUpload(CURRENT); } catch (e) { }
           document.getElementById('selectView').style.display = 'none';
           document.getElementById('uploadView').style.display = 'none';
@@ -6450,6 +6451,7 @@
             const wb = XLSX.read(e.target.result, { type: 'array', cellDates: true, dense: true, WTF: false });
             const { rows, note } = PROC.process(wb); if (!rows.length) throw new Error('No data rows were read from this file.');
             RAW = rows; sortKey = null; msState = {}; buildFilters(); applyFilters();
+            try { window.__lastFileName = (file && file.name) || null; } catch (e) { }
           try { statsBumpUpload(CURRENT); } catch (e) { }
             document.getElementById('uploadView').style.display = 'none'; document.getElementById('dashView').style.display = 'block';
             syncReportChrome();
@@ -6654,6 +6656,58 @@
       document.getElementById('kpis').innerHTML = PROC.kpis(VIEW).map(([l, v, s, c]) =>
         `<div class="kpi" style="--accent:${c}"><div class="lab"><span class="dot" style="background:${c}"></span>${l}</div><div class="val">${v}</div><div class="sub">${s}</div></div>`).join('');
     }
+    /* ---------------------------------------------------------------------------
+       Snapshot capture for the email.
+       Charts are built in the browser, so the mail function can never recompute
+       them. We intercept new Chart(...) while rendering to read each chart's
+       labels + values, then store that alongside the KPIs. No report module is
+       modified — whatever a module draws is exactly what the email shows.
+    --------------------------------------------------------------------------- */
+    function captureChartData(specs) {
+      const out = [];
+      const RealChart = window.Chart;
+      const cap = [];
+      window.Chart = function (cv, cfg) {
+        try {
+          const d = (cfg && cfg.data) || {};
+          const labels = (d.labels || []).map(x => String(x));
+          const sets = (d.datasets || []).map(ds => ({
+            label: ds.label || '',
+            data: (ds.data || []).map(v => (typeof v === 'number' ? v : (v && v.y != null ? v.y : Number(v) || 0)))
+          }));
+          cap.push({ type: (cfg && cfg.type) || 'bar', labels, datasets: sets });
+        } catch (e) { cap.push(null); }
+        return new RealChart(cv, cfg);
+      };
+      window.Chart.defaults = RealChart.defaults;
+      try {
+        specs.forEach((sp, i) => {
+          cap.length = 0;
+          const cv = document.getElementById('ch' + i);
+          if (!cv) return;
+          const obj = sp.render(cv);
+          chartObjs.push(obj);
+          if (sp.legend && cv._legend) { const lg = document.getElementById('lg' + i); if (lg) lg.innerHTML = cv._legend; }
+          const c = cap[0];
+          if (c && c.labels.length) out.push({ title: sp.title, sub: sp.sub || '', type: c.type, labels: c.labels, datasets: c.datasets });
+        });
+      } finally { window.Chart = RealChart; }
+      return out;
+    }
+
+    // fire-and-forget; never block the dashboard on this
+    async function saveSnapshot(chartData) {
+      try {
+        if (!SB || !USER || !USER.token || !CURRENT || !PROC) return;
+        const kpis = (PROC.kpis ? PROC.kpis(VIEW) : []).map(k => ({ label: k[0], value: k[1], sub: k[2] || '' }));
+        await SB.rpc('save_snapshot', {
+          p_token: USER.token, p_report_type: CURRENT,
+          p_kpis: kpis, p_charts: chartData || [],
+          p_row_count: VIEW.length, p_file_name: (window.__lastFileName || null)
+        });
+      } catch (e) { }
+    }
+
     function renderCharts() {
       chartObjs.forEach(c => c && c.destroy()); chartObjs = []; const specs = PROC.charts(VIEW) || []; const host = document.getElementById('charts');
       if (!specs.length) { host.innerHTML = ''; return; }
@@ -6664,10 +6718,8 @@
         }).join('') + '</div>';
       }
       host.innerHTML = html;
-      specs.forEach((s, idx) => {
-        const cv = document.getElementById('ch' + idx); if (!cv) return; const obj = s.render(cv); chartObjs.push(obj);
-        if (s.legend && cv._legend) { const lg = document.getElementById('lg' + idx); if (lg) lg.innerHTML = cv._legend; }
-      });
+      const captured = captureChartData(specs);
+      saveSnapshot(captured);          // stored for the email; never blocks rendering
     }
     function fmtCell(v, fmt) {
       if (fmt === 'date') return v && v.toLocaleDateString ? v.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : (v || '—');
