@@ -21,14 +21,23 @@ This adds:
 - `email_schedules` and `email_log` tables
 - the admin RPCs and the `email_dispatch_due()` job
 
-## 2. Get a Resend API key
+## 2. Create a Gmail App Password  (recommended transport)
 
-1. Sign up at **resend.com** (no card needed)
-2. **API Keys → Create** → copy it
+Sending through your own Google Workspace mailbox means **no DNS verification**
+and mail can go to **anyone** — from the real `itsupport@visioninfraindia.com`.
 
-Until `visioninfraindia.com` is verified you can only send to **your own**
-Resend account address — that is Resend's anti-abuse rule, not a bug. Use
-**Send test** to yourself in the meantime.
+1. Sign in as `itsupport@visioninfraindia.com`
+2. Go to **https://myaccount.google.com/apppasswords**
+   (needs 2-Step Verification on; if the page is missing, your Workspace admin
+   has disabled App Passwords — ask them to allow it)
+3. Name it `Report Analyzer` → **Create** → copy the 16-character code
+
+That code is a password for this app only, and can be revoked without touching
+your account password. Spaces in it are ignored.
+
+*Resend remains supported as a fallback and is used automatically if the Gmail
+variables are absent — but until `visioninfraindia.com` is verified it can only
+deliver to your own Resend account address.*
 
 ## 3. Vercel environment variables
 
@@ -36,12 +45,14 @@ Project → **Settings → Environment Variables**:
 
 | Name | Value |
 |---|---|
-| `RESEND_API_KEY` | from step 2 |
+| `GMAIL_USER` | `itsupport@visioninfraindia.com` |
+| `GMAIL_APP_PASSWORD` | the 16-character code from step 2 |
+| `RESEND_API_KEY` | *(optional fallback)* |
 | `SUPABASE_URL` | `https://tytzjbvmjtdfxfvftigq.supabase.co` |
 | `SUPABASE_SERVICE_KEY` | Supabase → Settings → API → **service_role** key |
 | `MAIL_SECRET` | any long random string (you choose it) |
 | `PORTAL_URL` | `https://your-app.vercel.app` |
-| `MAIL_FROM` | *(later)* `VIESL Reports <reports@visioninfraindia.com>` |
+| `MAIL_FROM` | *(optional)* defaults to `VIESL Reports <GMAIL_USER>` |
 
 ⚠️ The **service_role** key bypasses row-level security. It lives only in Vercel
 env vars — never in the browser, never in the repo.
@@ -76,7 +87,22 @@ formatting before enabling it.
 
 ---
 
-## Verifying your domain (to send to everyone)
+## Which transport is being used?
+
+The **Recent sends** detail is prefixed `[gmail]` or `[resend]`, so you can always
+see which path a send took.
+
+Gmail wins whenever `GMAIL_USER` + `GMAIL_APP_PASSWORD` are both set.
+
+**Gmail limits:** roughly 500 external recipients/day on Workspace, and 2,000
+messages/day. Comfortably above this app's usage.
+
+**If SMTP fails**, the log shows Google's own wording, e.g.
+`535-5.7.8 Username and Password not accepted` (wrong or revoked App Password).
+
+---
+
+## Verifying your domain (only needed for the Resend path)
 
 Add Resend's three DNS records **wherever your DNS is actually served**.
 Note: `visioninfraindia.com` currently resolves to `kyle.ns.cloudflare.com` /

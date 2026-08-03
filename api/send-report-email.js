@@ -4,8 +4,22 @@
 //  Called by Supabase pg_cron (or manually from the admin panel's "Send test").
 //  Builds a branded HTML email and sends it through Resend.
 //
+//  TWO SEND MODES — Gmail SMTP is preferred, Resend is the fallback.
+//
+//  A) GMAIL SMTP (recommended: works today, no DNS verification needed).
+//     Sends through your real Google Workspace mailbox, so mail genuinely comes
+//     from itsupport@visioninfraindia.com and can go to ANYONE.
+//        GMAIL_USER            itsupport@visioninfraindia.com
+//        GMAIL_APP_PASSWORD    16-char App Password (NOT your normal password)
+//     Create one at https://myaccount.google.com/apppasswords
+//     Workspace limit is ~500 external recipients/day — ample here.
+//
+//  B) RESEND (fallback, used only when the Gmail vars are absent).
+//     Until visioninfraindia.com is verified it can ONLY deliver to your own
+//     Resend account address; anyone else returns 403 validation_error.
+//
 //  REQUIRED environment variables (Vercel > Settings > Environment Variables):
-//     RESEND_API_KEY        from resend.com  (free tier: 100/day, 3000/month)
+//     RESEND_API_KEY        from resend.com  (only needed for mode B)
 //     SUPABASE_URL          https://xxxx.supabase.co
 //     SUPABASE_SERVICE_KEY  service_role key (NEVER exposed to the browser)
 //     MAIL_SECRET           same random string used in app.mail_secret
@@ -16,6 +30,9 @@
 //
 //  No npm packages needed — uses built-in fetch (Node 18+ on Vercel).
 // ============================================================================
+
+let nodemailer = null;
+try { nodemailer = require('nodemailer'); } catch (e) { /* falls back to Resend */ }
 
 const REPORT_NAMES = {
   rental: 'P&M Rental Report',
@@ -188,6 +205,47 @@ function buildHtml({ recipientName, title, description, reports, portalUrl }) {
 </body></html>`;
 }
 
+// Reused across warm invocations so we are not re-opening SMTP on every email.
+let _tx = null;
+function gmailTransport() {
+  const { GMAIL_USER, GMAIL_APP_PASSWORD } = process.env;
+  if (!GMAIL_USER || !GMAIL_APP_PASSWORD || !nodemailer) return null;
+  if (!_tx) {
+    _tx = nodemailer.createTransport({
+      host: 'smtp.gmail.com',
+      port: 465,
+      secure: true,                               // implicit TLS; avoids STARTTLS races
+      auth: { user: GMAIL_USER, pass: String(GMAIL_APP_PASSWORD).replace(/\s+/g, '') },
+      pool: true, maxConnections: 1, maxMessages: 50,
+      connectionTimeout: 15000, greetingTimeout: 10000, socketTimeout: 20000
+    });
+  }
+  return _tx;
+}
+
+// Returns { ok, error } for one recipient, via whichever transport is configured.
+async function sendOne({ to, subject, html, from }) {
+  const tx = gmailTransport();
+  if (tx) {
+    try {
+      await tx.sendMail({ from, to, subject, html });
+      return { ok: true };
+    } catch (e) {
+      // surface Gmail's own wording (bad App Password, quota, blocked sign-in…)
+      return { ok: false, error: 'SMTP: ' + String(e && (e.response || e.message) || e).slice(0, 200) };
+    }
+  }
+  const key = process.env.RESEND_API_KEY;
+  if (!key) return { ok: false, error: 'No mail transport configured (set GMAIL_USER + GMAIL_APP_PASSWORD, or RESEND_API_KEY).' };
+  const r = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from, to: [to], subject, html })
+  });
+  if (r.ok) return { ok: true };
+  return { ok: false, error: (await r.text()).slice(0, 200) };
+}
+
 module.exports = async (req, res) => {
   if (req.method === 'OPTIONS') { res.status(204).end(); return; }
   if (req.method !== 'POST') { res.status(405).json({ ok: false, error: 'Method not allowed.' }); return; }
@@ -197,8 +255,10 @@ module.exports = async (req, res) => {
     MAIL_SECRET, PORTAL_URL, MAIL_FROM
   } = process.env;
 
-  const missing = ['RESEND_API_KEY', 'SUPABASE_URL', 'SUPABASE_SERVICE_KEY']
-    .filter(k => !process.env[k]);
+  const missing = ['SUPABASE_URL', 'SUPABASE_SERVICE_KEY'].filter(k => !process.env[k]);
+  const hasGmail  = !!(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD && nodemailer);
+  const hasResend = !!process.env.RESEND_API_KEY;
+  if (!hasGmail && !hasResend) missing.push('GMAIL_USER + GMAIL_APP_PASSWORD (or RESEND_API_KEY)');
   if (missing.length) {
     res.status(500).json({ ok: false, error: 'Server is missing: ' + missing.join(', ') });
     return;
@@ -255,7 +315,10 @@ module.exports = async (req, res) => {
       return;
     }
 
-    const from = MAIL_FROM || 'VIESL Reports <onboarding@resend.dev>';
+    // Gmail must send as the authenticated mailbox, otherwise Google rewrites or rejects it.
+    const from = hasGmail
+      ? (MAIL_FROM || ('VIESL Reports <' + process.env.GMAIL_USER + '>'))
+      : (MAIL_FROM || 'VIESL Reports <onboarding@resend.dev>');
     const portal = PORTAL_URL || 'https://vision-report-transformer.vercel.app';
 
     let sent = 0; const failures = [];
@@ -264,26 +327,21 @@ module.exports = async (req, res) => {
         recipientName: p.name, title: sch.title, description: sch.description,
         reports, portalUrl: portal
       });
-      const r = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: { Authorization: 'Bearer ' + RESEND_API_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          from, to: [p.email],
-          subject: sch.title || 'Report update \u2014 VIESL Report Analyzer',
-          html
-        })
+      const r = await sendOne({
+        to: p.email, from, html,
+        subject: sch.title || 'Report update \u2014 VIESL Report Analyzer'
       });
-      if (r.ok) sent++;
-      else failures.push(p.email + ': ' + (await r.text()).slice(0, 160));
+      if (r.ok) sent++; else failures.push(p.email + ': ' + r.error);
     }
+    try { if (_tx) _tx.close(); } catch (e) { }   // release the SMTP pool before the lambda freezes
 
     const status = failures.length === 0 ? 'sent' : (sent > 0 ? 'partial' : 'failed');
-    const detail = sent + ' sent' + (failures.length ? ' \u00b7 ' + failures.length + ' failed \u00b7 ' + failures[0] : '');
+    const detail = '[' + (hasGmail ? 'gmail' : 'resend') + '] ' + sent + ' sent' + (failures.length ? ' \u00b7 ' + failures.length + ' failed \u00b7 ' + failures[0] : '');
     // logging must never turn a successful send into a 'failed' row
     if (!testTo) { try { await sb('email_mark_sent', { p_id: scheduleId, p_status: status, p_detail: detail }); } catch (_) { } }
     logged = true;
 
-    res.status(200).json({ ok: sent > 0, sent, failed: failures.length, detail });
+    res.status(200).json({ ok: sent > 0, sent, failed: failures.length, detail, transport: hasGmail ? 'gmail' : 'resend' });
   } catch (e) {
     // only log here if the send itself never reported a result, otherwise a
     // post-send hiccup would append a duplicate 'failed' row to a real send.
