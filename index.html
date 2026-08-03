@@ -3208,7 +3208,9 @@
         const last = s2.last_sent_at ? fmtWhen(s2.last_sent_at) : 'never';
         const nxt = nextRunLabel(s2);
         const badge = s2.enabled ? '<span class="pill approved">On</span>' : '<span class="pill pending">Paused</span>';
-        return '<tr><td><b>' + escH(s2.title) + '</b></td>'
+        const shownSubj = composeSubject(s2.subject_mode || 'custom', s2.title, s2.report_types || []);
+        return '<tr><td><b>' + escH(shownSubj) + '</b>'
+          + (s2.subject_mode && s2.subject_mode !== 'custom' ? '<div class="mail-sub">auto-generated subject</div>' : '') + '</td>'
           + '<td>' + escH(rts.join(', ')) + '</td>'
           + '<td>' + (s2.recipients || []).length + '</td>'
           + '<td>' + escH(s2.send_time) + '<div class="mail-sub">' + escH(days) + '</div>'
@@ -3246,6 +3248,7 @@
       const sel = s2 ? (s2.report_types || []) : [];
       const rec = s2 ? (s2.recipients || []) : [];
       const dys = s2 ? (s2.days || []).map(String) : ['1','2','3','4','5'];
+      const mode = (s2 && s2.subject_mode) ? s2.subject_mode : 'report_date';
       const users = (ADM_USERS || []).filter(u => u.status === 'approved');
       const reportBoxes = Object.entries(REPORTS).map(([rid, pr]) =>
         '<label class="mail-chk"><input type="checkbox" class="ms-rep" value="' + rid + '"'
@@ -3262,8 +3265,17 @@
         '<div class="mail-head"><button class="btn btn-line" onclick="closeMailEditor()">\u2190 Back</button>'
         + '<h3>' + (s2 ? 'Edit schedule' : 'New schedule') + '</h3></div>'
         + '<div class="mail-form">'
-        + '<label class="mail-lbl">Title <span>shown as the email subject</span></label>'
-        + '<input id="mTitle" class="mail-in" placeholder="Daily P&amp;M report update" value="' + escH(s2 ? s2.title : '') + '">'
+        + '<label class="mail-lbl">Email subject <span>generated fresh each time it sends</span></label>'
+        + '<select id="mSubjMode" class="mail-in">'
+        + '<option value="report_date"' + (mode === 'report_date' ? ' selected' : '') + '>Report Name + Current Date</option>'
+        + '<option value="custom"' + (mode === 'custom' ? ' selected' : '') + '>Create Custom Subject</option>'
+        + '<option value="all_summary"' + (mode === 'all_summary' ? ' selected' : '') + '>All Reports Summary</option>'
+        + '</select>'
+        + '<div id="mTitleWrap" style="margin-top:9px">'
+        + '<input id="mTitle" class="mail-in" maxlength="120" placeholder="e.g. Daily P&amp;M report update" value="' + escH(s2 ? s2.title : '') + '">'
+        + '</div>'
+        + '<div class="subj-prev"><span class="sp-lbl">Preview</span>'
+        + '<span class="sp-val" id="mSubjPrev">\u2014</span></div>'
         + '<label class="mail-lbl">Description <span>appears in the body of the email</span></label>'
         + '<textarea id="mDesc" class="mail-in" rows="3" placeholder="The latest rental data has been uploaded to the portal.">' + escH(s2 ? (s2.description || '') : '') + '</textarea>'
         + '<label class="mail-lbl">Reports <span>which reports this alert covers</span></label>'
@@ -3281,6 +3293,46 @@
       document.getElementById('mailList').style.display = 'none';
       document.getElementById('mailEditor').style.display = 'block';
       document.getElementById('mSave').onclick = saveSchedule;
+      const _sm = document.getElementById('mSubjMode');
+      if (_sm) _sm.onchange = syncSubjectUI;
+      const _mt = document.getElementById('mTitle');
+      if (_mt) _mt.oninput = updateSubjectPreview;
+      document.querySelectorAll('#mailEditor .ms-rep').forEach(cb => cb.addEventListener('change', updateSubjectPreview));
+      syncSubjectUI();
+    }
+
+    /* Subject preview — mirrors buildSubject() in api/send-report-email.js so what
+       the admin sees here is exactly what goes out. */
+    function todayISTLabel() {
+      return new Date().toLocaleDateString('en-GB', {
+        timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric'
+      });
+    }
+    function composeSubject(mode, title, reportIds) {
+      const d = todayISTLabel();
+      const names = (reportIds || []).map(r => (REPORTS[r] && REPORTS[r].meta) ? cleanName(REPORTS[r].meta.name) : r);
+      if (mode === 'all_summary') return 'Daily Reports Summary - ' + d;
+      if (mode === 'report_date') {
+        if (names.length === 1) return names[0] + ' - ' + d;
+        if (names.length > 1) return names.length + ' Reports - ' + d;
+        return 'Report Update - ' + d;
+      }
+      return (title && title.trim()) ? title.trim() : '(enter a subject below)';
+    }
+    function updateSubjectPreview() {
+      const prev = document.getElementById('mSubjPrev'); if (!prev) return;
+      const mode = (document.getElementById('mSubjMode') || {}).value || 'custom';
+      const title = (document.getElementById('mTitle') || {}).value || '';
+      const ids = [...document.querySelectorAll('#mailEditor .ms-rep:checked')].map(x => x.value);
+      const subj = composeSubject(mode, title, ids);
+      prev.textContent = subj;
+      prev.classList.toggle('muted', mode === 'custom' && !title.trim());
+    }
+    function syncSubjectUI() {
+      const mode = (document.getElementById('mSubjMode') || {}).value || 'custom';
+      const wrap = document.getElementById('mTitleWrap');
+      if (wrap) wrap.style.display = (mode === 'custom') ? 'block' : 'none';
+      updateSubjectPreview();
     }
 
     async function saveSchedule() {
@@ -3295,7 +3347,8 @@
           p_token: USER.token, p_id: MAIL_EDIT, p_title: g('mTitle').value,
           p_report_types: reports, p_recipients: users,
           p_description: g('mDesc').value, p_send_time: g('mTime').value,
-          p_days: days, p_enabled: g('mOn').checked
+          p_days: days, p_enabled: g('mOn').checked,
+          p_subject_mode: (g('mSubjMode') || {}).value || 'custom'
         });
         if (!d.ok) { msg.textContent = d.error || 'Could not save.'; msg.className = 'mail-msg err'; }
         else { msg.textContent = '\u2713 Saved.'; msg.className = 'mail-msg ok'; await loadSchedules(); setTimeout(closeMailEditor, 500); }
@@ -3309,7 +3362,7 @@
         await rpc('admin_save_schedule', {
           p_token: USER.token, p_id: id, p_title: s2.title, p_report_types: s2.report_types,
           p_recipients: s2.recipients, p_description: s2.description, p_send_time: s2.send_time,
-          p_days: s2.days, p_enabled: !s2.enabled
+          p_days: s2.days, p_enabled: !s2.enabled, p_subject_mode: s2.subject_mode || 'custom'
         });
         loadSchedules();
       } catch (e) { alert('Could not update: ' + (e.message || e)); }
@@ -8423,6 +8476,19 @@
   <style>
     .mail-next { font-size: 10.5px; font-weight: 700; color: #0a7d54; margin-top: 3px; }
     body[data-theme="dark"] .mail-next { color: #6fe3b5; }
+  </style>
+  <style>
+    /* ===================== EMAIL SUBJECT PICKER ===================== */
+    #mSubjMode { cursor: pointer; }
+    .subj-prev { display: flex; align-items: center; gap: 11px; margin-top: 11px; padding: 11px 14px;
+      border: 1px solid var(--line); border-left: 3px solid var(--steel); border-radius: 10px;
+      background: var(--sky); }
+    .sp-lbl { flex: none; font-size: 9.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase;
+      color: var(--muted); }
+    .sp-val { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 650; color: var(--ink);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sp-val.muted { font-weight: 500; color: var(--hint); font-style: italic; }
+    body[data-theme="dark"] .subj-prev { background: var(--surf2); border-color: var(--line); border-left-color: var(--steel); }
   </style>
 </body>
 

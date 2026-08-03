@@ -43,6 +43,38 @@ const REPORT_NAMES = {
   sales: 'Sales Dashboard'
 };
 
+// Administrator contacts shown at the bottom of every alert.
+const CONTACTS = [
+  { name: 'Mr. Sandeep Patil',     role: 'Manager \u00b7 P&M / Audit',  email: 'pnm_audit@visioninfraindia.com',  phone: '+91 89566 67459' },
+  { name: 'Mr. Harshal Khadatare', role: 'Data Engineer \u00b7 IT',     email: 'itsupport@visioninfraindia.com',  phone: '+91 90757 68742' }
+];
+
+// "03 Aug 2026" in IST
+function todayIST() {
+  return new Date().toLocaleDateString('en-GB', {
+    timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric'
+  });
+}
+
+// Built at SEND time so the date is always current.
+//   report_date -> "P&M Rental Report - 03 Aug 2026"  (or "2 Reports - ..." when several)
+//   all_summary -> "Daily Reports Summary - 03 Aug 2026"
+//   custom      -> exactly what the admin typed
+function buildSubject(sch, reportTypes) {
+  const d = todayIST();
+  const mode = sch.subject_mode || 'custom';
+  const names = (reportTypes || []).map(r => REPORT_NAMES[r] || r);
+  if (mode === 'all_summary') return 'Daily Reports Summary - ' + d;
+  if (mode === 'report_date') {
+    if (names.length === 1) return names[0] + ' - ' + d;
+    if (names.length > 1)   return names.length + ' Reports - ' + d;
+    return 'Report Update - ' + d;
+  }
+  return (sch.title && sch.title.trim())
+    ? sch.title.trim()
+    : 'Report update \u2014 VIESL Report Analyzer';
+}
+
 const esc = t => String(t == null ? '' : t)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
@@ -120,12 +152,12 @@ function buildHtml({ recipientName, title, description, reports, portalUrl }) {
         <tr><td style="background:#0e2a43;background-image:linear-gradient(135deg,#16456c 0%,#0e2a43 100%);padding:22px 28px;">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
             <tr>
-              <td width="52" valign="middle" style="padding-right:14px;">
+              <td width="86" valign="middle" style="padding-right:16px;">
                 <table role="presentation" cellpadding="0" cellspacing="0"
-                       style="background:#ffffff;border-radius:11px;">
-                  <tr><td align="center" valign="middle" style="width:52px;height:52px;padding:6px;">
-                    <img src="${esc(logo)}" alt="VIESL" width="40"
-                         style="display:block;width:40px;height:auto;border:0;">
+                       style="background:#ffffff;border-radius:13px;">
+                  <tr><td align="center" valign="middle" style="width:86px;height:74px;padding:9px 10px;">
+                    <img src="${esc(logo)}" alt="Vision Infra Equipment Solutions Ltd" width="70"
+                         style="display:block;width:70px;max-width:70px;height:auto;border:0;">
                   </td></tr>
                 </table>
               </td>
@@ -183,8 +215,28 @@ function buildHtml({ recipientName, title, description, reports, portalUrl }) {
           </div>
         </td></tr>
 
+        <!-- contact us -->
+        <tr><td style="padding:26px 28px 0;">
+          <div style="font:700 10.5px/1 ${F};color:#8496a9;letter-spacing:.11em;
+                      text-transform:uppercase;padding-bottom:11px;">Contact us</div>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+                 style="border:1px solid #e3eaf2;border-radius:12px;background:#f8fafc;">
+            <tr>
+              ${CONTACTS.map((c, i) => `
+              <td width="50%" valign="top" style="padding:15px 16px;${i === 0 ? 'border-right:1px solid #e3eaf2;' : ''}">
+                <div style="font:600 13.5px/1.35 ${F};color:#12314f;">${esc(c.name)}</div>
+                <div style="font:400 11.5px/1.45 ${F};color:#8496a9;padding:2px 0 8px;">${esc(c.role)}</div>
+                <div style="font:400 12px/1.7 ${F};color:#44586e;">
+                  <a href="mailto:${esc(c.email)}" style="color:#2f6db0;text-decoration:none;">${esc(c.email)}</a><br>
+                  <a href="tel:${esc(c.phone.replace(/\s/g, ''))}" style="color:#44586e;text-decoration:none;">${esc(c.phone)}</a>
+                </div>
+              </td>`).join('')}
+            </tr>
+          </table>
+        </td></tr>
+
         <!-- footer -->
-        <tr><td style="padding:24px 28px 26px;">
+        <tr><td style="padding:22px 28px 26px;">
           <div style="border-top:1px solid #e6ecf3;padding-top:16px;">
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
               <tr><td style="font:400 11.5px/1.65 ${F};color:#8496a9;">
@@ -329,7 +381,7 @@ module.exports = async (req, res) => {
       });
       const r = await sendOne({
         to: p.email, from, html,
-        subject: sch.title || 'Report update \u2014 VIESL Report Analyzer'
+        subject: buildSubject(sch, sch.report_types)
       });
       if (r.ok) sent++; else failures.push(p.email + ': ' + r.error);
     }

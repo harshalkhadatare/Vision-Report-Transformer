@@ -860,3 +860,54 @@ begin
            order by report_type, uploaded_at desc) x;
   return json_build_object('ok',true,'schedule',row_to_json(s),'recipients',r,'reports',rep);
 end; $$;
+
+-- ============================================================================
+-- EMAIL SUBJECT MODES
+--   subject_mode: 'report_date'  -> "P&M Rental Report - 03 Aug 2026"
+--                 'custom'       -> whatever the admin typed (title)
+--                 'all_summary'  -> "Daily Reports Summary - 03 Aug 2026"
+--   The subject is generated at SEND time so the date is always current.
+--   Safe + idempotent to re-run.
+-- ============================================================================
+alter table public.email_schedules
+  add column if not exists subject_mode text not null default 'custom';
+
+create or replace function public.admin_save_schedule(
+  p_token uuid, p_id uuid, p_title text, p_report_types jsonb, p_recipients jsonb,
+  p_description text, p_send_time text, p_days jsonb, p_enabled boolean,
+  p_subject_mode text default 'custom')
+returns json language plpgsql security definer set search_path = public as $$
+declare a record; v_id uuid; v_mode text;
+begin
+  a := public._admin(p_token); if a.id is null then return json_build_object('ok',false,'error','Admin only.'); end if;
+  v_mode := coalesce(nullif(trim(p_subject_mode),''),'custom');
+  if v_mode not in ('report_date','custom','all_summary') then v_mode := 'custom'; end if;
+  -- only a custom subject needs typed text; the others are generated
+  if v_mode = 'custom' and coalesce(trim(p_title),'') = '' then
+    return json_build_object('ok',false,'error','Enter a subject, or choose one of the generated options.'); end if;
+  if p_send_time !~ '^([01][0-9]|2[0-3]):[0-5][0-9]$' then
+    return json_build_object('ok',false,'error','Time must be in HH:MM (24-hour) format.'); end if;
+  if jsonb_array_length(coalesce(p_report_types,'[]'::jsonb)) = 0 then
+    return json_build_object('ok',false,'error','Select at least one report.'); end if;
+  if jsonb_array_length(coalesce(p_recipients,'[]'::jsonb)) = 0 then
+    return json_build_object('ok',false,'error','Select at least one recipient.'); end if;
+
+  if p_id is null then
+    insert into public.email_schedules (title,report_types,recipients,description,send_time,days,enabled,created_by,subject_mode)
+    values (coalesce(trim(p_title),''),p_report_types,p_recipients,p_description,p_send_time,
+            coalesce(p_days,'[1,2,3,4,5]'::jsonb),coalesce(p_enabled,true),a.user_id,v_mode)
+    returning id into v_id;
+  else
+    update public.email_schedules
+       set title=coalesce(trim(p_title),''), report_types=p_report_types, recipients=p_recipients,
+           description=p_description, send_time=p_send_time,
+           days=coalesce(p_days,'[1,2,3,4,5]'::jsonb), enabled=coalesce(p_enabled,true),
+           subject_mode=v_mode
+     where id=p_id returning id into v_id;
+    if v_id is null then return json_build_object('ok',false,'error','Schedule not found.'); end if;
+  end if;
+  perform public.log_activity(a.user_id,a.name,'email_schedule', coalesce(trim(p_title),v_mode));
+  return json_build_object('ok',true,'id',v_id);
+end; $$;
+
+grant execute on function public.admin_save_schedule(uuid,uuid,text,jsonb,jsonb,text,text,jsonb,boolean,text) to anon, authenticated;
