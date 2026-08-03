@@ -31,6 +31,8 @@
 //  No npm packages needed — uses built-in fetch (Node 18+ on Vercel).
 // ============================================================================
 
+const TPL = require('./_email-templates.js');
+
 let nodemailer = null;
 try { nodemailer = require('nodemailer'); } catch (e) { /* falls back to Resend */ }
 
@@ -73,6 +75,14 @@ function buildSubject(sch, reportTypes) {
   return (sch.title && sch.title.trim())
     ? sch.title.trim()
     : 'Report update \u2014 VIESL Report Analyzer';
+}
+
+function fmtSize(b) {
+  const n = Number(b) || 0;
+  if (!n) return '';
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(0) + ' KB';
+  return (n / 1048576).toFixed(1) + ' MB';
 }
 
 const esc = t => String(t == null ? '' : t)
@@ -187,7 +197,8 @@ function buildHtml({ recipientName, title, description, reports, portalUrl }) {
               </td>
             </tr>
             ${r.file_name ? `<tr><td colspan="2" style="font:400 11px/1.5 ${F};color:#8496a9;padding-top:3px;">
-              ${esc(r.file_name)}${r.row_count ? ' &middot; ' + Number(r.row_count).toLocaleString('en-IN') + ' rows' : ''}
+              ${esc(r.file_name)}${r.row_count ? ' &middot; ' + Number(r.row_count).toLocaleString('en-IN') + ' records' : ''}
+              ${r.file_size ? ' &middot; ' + fmtSize(r.file_size) : ''}
               ${r.uploaded_by ? ' &middot; by ' + esc(r.uploaded_by) : ''}</td></tr>` : ''}
           </table>
         </td></tr>
@@ -325,8 +336,10 @@ function buildHtml({ recipientName, title, description, reports, portalUrl }) {
           </div>
         </td></tr>
 
-        <!-- contact us -->
-        <tr><td style="padding:26px 28px 0;">
+        ${TPL.contactCard()}
+        ${TPL.footer(process.env.APP_VERSION || 'v5.1')}
+        <!-- (legacy blocks below are unused, kept out of the render) -->
+        <tr style="display:none"><td style="padding:0;">
           <div style="font:700 10.5px/1 ${F};color:#8496a9;letter-spacing:.11em;
                       text-transform:uppercase;padding-bottom:11px;">Contact us</div>
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
@@ -429,8 +442,9 @@ module.exports = async (req, res) => {
   let body = req.body;
   if (typeof body === 'string') { try { body = JSON.parse(body); } catch (e) { body = {}; } }
   const scheduleId = body && body.schedule_id;
+  const outboxId   = body && body.outbox_id;
   const testTo = body && body.test_to;            // "Send test" from the admin panel
-  if (!scheduleId) { res.status(400).json({ ok: false, error: 'No schedule_id supplied.' }); return; }
+  if (!scheduleId && !outboxId) { res.status(400).json({ ok: false, error: 'No schedule_id or outbox_id supplied.' }); return; }
 
   // shared-secret check (skipped for admin "send test", which carries its own token check)
   if (MAIL_SECRET && !testTo && req.headers['x-mail-secret'] !== MAIL_SECRET) {
@@ -456,6 +470,47 @@ module.exports = async (req, res) => {
     if (!raw) return null;
     try { return JSON.parse(raw); } catch (e) { return null; }
   };
+
+  const portalDefault = PORTAL_URL || 'https://vision-report-transformer.vercel.app';
+  const logoUrl = portalDefault.replace(/\/$/, '') + '/images/logo.png';
+  const APP_VERSION = process.env.APP_VERSION || 'v5.1';
+
+  // ---------- transactional mail (approval, reset, lockout, ...) ----------
+  if (outboxId) {
+    try {
+      const ob = await sb('outbox_payload_svc', { p_id: outboxId });
+      if (!ob || ob.ok !== true) {
+        res.status(200).json({ ok: false, error: (ob && ob.error) || 'Outbox item not found.' });
+        return;
+      }
+      const d = Object.assign({}, ob.payload || {}, {
+        portalUrl: portalDefault, logoUrl, version: APP_VERSION
+      });
+      const maker = TPL[ob.template];
+      if (typeof maker !== 'function') {
+        await sb('outbox_mark', { p_id: outboxId, p_status: 'failed', p_detail: 'Unknown template: ' + ob.template });
+        res.status(200).json({ ok: false, error: 'Unknown template: ' + ob.template });
+        return;
+      }
+      const built = maker(d);
+      const from = hasGmail
+        ? (MAIL_FROM || ('VIESL Reports <' + process.env.GMAIL_USER + '>'))
+        : (MAIL_FROM || 'VIESL Reports <onboarding@resend.dev>');
+      const r = await sendOne({ to: ob.to_email, from, subject: built.subject, html: built.html });
+      try { if (_tx) _tx.close(); } catch (e) { }
+      await sb('outbox_mark', {
+        p_id: outboxId,
+        p_status: r.ok ? 'sent' : 'failed',
+        p_detail: '[' + (hasGmail ? 'gmail' : 'resend') + '] ' + (r.ok ? 'sent to ' + ob.to_email : r.error)
+      });
+      res.status(200).json({ ok: r.ok, template: ob.template, to: ob.to_email, error: r.error });
+      return;
+    } catch (e) {
+      try { await sb('outbox_mark', { p_id: outboxId, p_status: 'failed', p_detail: String(e.message || e) }); } catch (_) { }
+      res.status(200).json({ ok: false, error: String(e.message || e) });
+      return;
+    }
+  }
 
   let logged = false;
   try {

@@ -1062,13 +1062,13 @@ begin
   select coalesce(json_agg(x order by x.ord),'[]') into rep from (
     select t.ord,
            t.rt                                   as report_type,
-           up.file_name, up.row_count, up.uploaded_at, up.uploaded_by,
+           up.file_name, up.row_count, up.uploaded_at, up.uploaded_by, up.file_size,
            coalesce(sn.kpis,   '[]'::jsonb)       as kpis,
            coalesce(sn.charts, '[]'::jsonb)       as charts,
            sn.captured_at
       from jsonb_array_elements_text(s.report_types) with ordinality as t(rt, ord)
       left join lateral (
-        select file_name,row_count,uploaded_at,uploaded_by
+        select file_name,row_count,uploaded_at,uploaded_by,file_size
           from public.uploads u2 where u2.report_type = t.rt
          order by uploaded_at desc limit 1) up on true
       left join public.report_snapshots sn on sn.report_type = t.rt
@@ -1076,3 +1076,144 @@ begin
 
   return json_build_object('ok',true,'schedule',row_to_json(s),'recipients',r,'reports',rep);
 end; $$;
+
+-- ============================================================================
+-- OFFICIAL EMAIL AT REGISTRATION  +  APPROVAL WELCOME MAIL
+--   Email becomes mandatory when signing up and is the address used for every
+--   system message. Admin can still edit it later via admin_set_email().
+--   Idempotent.
+-- ============================================================================
+
+-- queue of transactional mails the dispatcher picks up (approval, reset, etc.)
+create table if not exists public.mail_outbox (
+  id          uuid primary key default gen_random_uuid(),
+  template    text not null,                  -- 'approved' | 'locked' | 'created' | ...
+  to_email    text not null,
+  to_name     text,
+  payload     jsonb not null default '{}'::jsonb,
+  status      text not null default 'pending',
+  attempts    int  not null default 0,
+  detail      text,
+  created_at  timestamptz default now(),
+  sent_at     timestamptz
+);
+create index if not exists mail_outbox_pending_idx on public.mail_outbox (status, created_at);
+alter table public.mail_outbox enable row level security;
+
+-- registration now requires a valid, unused official email
+create or replace function public.register_user(
+  p_name text, p_user_id text, p_password text,
+  p_dept text default null, p_email text default null)
+returns json language plpgsql security definer set search_path = public, extensions as $$
+declare v_id uuid; v_role text; v_status text; v_first boolean; v_email text;
+begin
+  p_user_id := lower(trim(p_user_id));
+  v_email   := nullif(lower(trim(coalesce(p_email,''))),'');
+
+  if coalesce(trim(p_name),'') = '' then
+    return json_build_object('ok',false,'error','Please enter your full name.'); end if;
+  if p_user_id = '' then
+    return json_build_object('ok',false,'error','Please choose a User ID.'); end if;
+  if char_length(coalesce(p_password,'')) < 4 then
+    return json_build_object('ok',false,'error','Password must be at least 4 characters.'); end if;
+  if v_email is null then
+    return json_build_object('ok',false,'error','Official email address is required.'); end if;
+  if v_email !~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$' then
+    return json_build_object('ok',false,'error','That does not look like a valid email address.'); end if;
+  if exists (select 1 from public.app_users where user_id = p_user_id) then
+    return json_build_object('ok',false,'error','That User ID is already taken.'); end if;
+  if exists (select 1 from public.app_users where lower(email) = v_email) then
+    return json_build_object('ok',false,'error','That email address is already registered.'); end if;
+
+  -- the very first account bootstraps as an approved admin
+  select count(*) = 0 into v_first from public.app_users;
+  v_role   := case when v_first then 'admin'    else 'user'    end;
+  v_status := case when v_first then 'approved' else 'pending' end;
+
+  insert into public.app_users (name,user_id,password_hash,role,status,dept,email)
+  values (trim(p_name), p_user_id, crypt(p_password, gen_salt('bf')), v_role, v_status, p_dept, v_email)
+  returning id into v_id;
+
+  perform public.log_activity(p_user_id, trim(p_name), 'register', v_email);
+  return json_build_object('ok',true,'status',v_status,'role',v_role);
+end; $$;
+
+-- approving a user now queues the welcome email
+create or replace function public.admin_set_status(p_token uuid, p_user_id text, p_status text)
+returns json language plpgsql security definer set search_path = public as $$
+declare a record; u record;
+begin
+  a := public._admin(p_token); if a.id is null then return json_build_object('ok',false,'error','Admin only.'); end if;
+  if p_status not in ('approved','rejected','disabled','pending') then
+    return json_build_object('ok',false,'error','Unknown status.'); end if;
+
+  select * into u from public.app_users where user_id = lower(trim(p_user_id));
+  if u.id is null then return json_build_object('ok',false,'error','No such user.'); end if;
+
+  update public.app_users
+     set status = p_status,
+         approved_by = case when p_status='approved' then a.name else approved_by end,
+         approved_at = case when p_status='approved' then now() else approved_at end
+   where id = u.id;
+
+  -- queue the welcome mail only on a real pending -> approved transition
+  if p_status = 'approved' and u.status <> 'approved'
+     and u.email is not null and u.email <> '' then
+    insert into public.mail_outbox (template, to_email, to_name, payload)
+    values ('approved', u.email, u.name,
+            jsonb_build_object('name',u.name,'user_id',u.user_id,'email',u.email,
+                               'role',u.role,'dept',u.dept,
+                               'approved_by',a.name,'approved_at',now()));
+  end if;
+
+  perform public.log_activity(a.user_id,a.name,p_status,p_user_id);
+  return json_build_object('ok',true);
+end; $$;
+
+-- dispatcher hands pending outbox mail to the same endpoint
+create or replace function public.outbox_dispatch()
+returns void language plpgsql security definer set search_path = public, extensions as $$
+declare m record; v_url text; v_secret text;
+begin
+  select value into v_url    from public.app_config where key = 'mail_endpoint';
+  select value into v_secret from public.app_config where key = 'mail_secret';
+  if v_url is null or v_secret is null then return; end if;
+
+  select * into m from public.mail_outbox
+   where status = 'pending' and attempts < 5
+   order by created_at limit 1;                 -- one per tick: SMTP is serial
+  if m.id is null then return; end if;
+
+  perform net.http_post(
+    url     := v_url,
+    headers := jsonb_build_object('Content-Type','application/json','x-mail-secret',v_secret),
+    body    := jsonb_build_object('outbox_id', m.id)
+  );
+  update public.mail_outbox set attempts = attempts + 1 where id = m.id;
+end; $$;
+
+create or replace function public.outbox_mark(p_id uuid, p_status text, p_detail text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  update public.mail_outbox
+     set status = p_status, detail = p_detail,
+         sent_at = case when p_status = 'sent' then now() else sent_at end
+   where id = p_id;
+end; $$;
+
+create or replace function public.outbox_payload_svc(p_id uuid)
+returns json language plpgsql security definer set search_path = public as $$
+declare m record;
+begin
+  select * into m from public.mail_outbox where id = p_id;
+  if m.id is null then return json_build_object('ok',false,'error','Not found.'); end if;
+  return json_build_object('ok',true,'template',m.template,'to_email',m.to_email,
+                           'to_name',m.to_name,'payload',m.payload);
+end; $$;
+
+select cron.unschedule('outbox-dispatch')
+  where exists (select 1 from cron.job where jobname = 'outbox-dispatch');
+select cron.schedule('outbox-dispatch', '* * * * *', $cron$ select public.outbox_dispatch(); $cron$);
+
+grant execute on function public.register_user(text,text,text,text,text) to anon, authenticated;
+grant execute on function public.admin_set_status(uuid,text,text)         to anon, authenticated;

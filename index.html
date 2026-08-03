@@ -1956,6 +1956,10 @@
         <div class="auth-field"><label>Full Name</label><input id="rgName" placeholder="e.g. Harshal Khadatare"></div>
         <div class="auth-field"><label>User ID</label><input id="rgUser" autocomplete="username"
             placeholder="e.g. 21686"></div>
+        <div class="auth-field"><label>Official Email <span style="opacity:.6">(required)</span></label>
+          <input id="rgEmail" type="email" autocomplete="email" placeholder="e.g. yourname@visioninfraindia.com">
+          <div class="pwhint">All account, report and security emails are sent here.</div>
+        </div>
         <div class="auth-field"><label>Department <span style="opacity:.6">(optional)</span></label>
           <select id="rgDept">
             <option value="">— Select —</option>
@@ -3871,15 +3875,18 @@
     async function doRegister() {
       if (!SB) { authMsg('Supabase is not configured.', 'err'); return; }
       const name = document.getElementById('rgName').value.trim(), uid = document.getElementById('rgUser').value.trim(),
-        pass = document.getElementById('rgPass').value, dept = document.getElementById('rgDept').value;
+        pass = document.getElementById('rgPass').value, dept = document.getElementById('rgDept').value,
+        email = document.getElementById('rgEmail').value.trim();
       if (!name || !uid) { authMsg('Enter your name and User ID.', 'err'); return; }
+      if (!email) { authMsg('Official email address is required.', 'err'); document.getElementById('rgEmail').focus(); return; }
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { authMsg('That does not look like a valid email address.', 'err'); document.getElementById('rgEmail').focus(); return; }
       if (!pwValid(pass)) { authMsg('Password must be at least 4 characters.', 'err'); return; }
       const b = document.getElementById('rgBtn'); b.disabled = true; b.textContent = 'Creating…';
       try {
-        const { data, error } = await SB.rpc('register_user', { p_name: name, p_user_id: uid, p_password: pass, p_dept: dept || null }); if (error) throw error;
+        const { data, error } = await SB.rpc('register_user', { p_name: name, p_user_id: uid, p_password: pass, p_dept: dept || null, p_email: email }); if (error) throw error;
         if (!data.ok) authMsg(data.error, 'err');
         else if (data.first) { authMsg('Admin account created — you can log in now.', 'ok'); swapAuth(false); document.getElementById('liUser').value = data.user_id; document.getElementById('liPass').focus(); }
-        else { authMsg('Account created. An administrator must approve it before you can log in.', 'ok'); swapAuth(false); document.getElementById('liUser').value = data.user_id; }
+        else { authMsg('Account created. An administrator must approve it \u2014 you\u2019ll get a welcome email at ' + email + ' once they do.', 'ok'); swapAuth(false); document.getElementById('liUser').value = uid; }
       } catch (e) { authMsg('Could not register: ' + (e.message || e), 'err'); } b.disabled = false; b.textContent = 'Create account';
     }
     async function doLogin() {
