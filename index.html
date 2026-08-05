@@ -3590,7 +3590,7 @@
     }
     /* ===================== REPORT CATEGORIES + SIDEBAR NAV ===================== */
     const REPORT_CATEGORIES = [
-      { id: 'pm', label: 'P&M Reports', icon: '\uD83D\uDCC2', reports: ['rental', 'milling', 'bin'] },
+      { id: 'pm', label: 'P&M Reports', icon: '\uD83D\uDCC2', reports: ['rental', 'milling', 'bin', 'crusher'] },
       { id: 'store', label: 'Purchase & Store', icon: '\uD83D\uDCC2', reports: ['stock', 'pogin', 'ageing'] },
       { id: 'sales', label: 'Sales', icon: '\uD83D\uDCC2', reports: ['sales'] }
     ];
@@ -6564,6 +6564,395 @@
         sheetName: 'Bin Equipment Values', exportName: 'VisionInfra-Bin-Equipment-Values',
         process, kpis, charts, columns, tableColumns, filters, cascadeFilters: true,
         searchKeys: ['site', 'location', 'itemCode', 'itemDesc', 'binCode', 'binDesc', 'eqp', 'dept', 'fleet', 'itemClass'],
+        exportExcel
+      };
+    })();
+
+
+    /* ===================== CRUSHER REPORT ===================== */
+    /* Reverse-engineered from CRUSHER_DASHBOARD.xlsx (Master Data -> Dashboard,
+       Month Site Client, Machine wise, Site wise), validated to zero mismatches on
+       every sheet. Key rules discovered from the reference:
+         - Total Production = GSB + WMM + AGGREGATE; Total Dispatch likewise.
+         - Ltr / MT  = HDS ISSUE QTY / Total Production (month block).
+         - Ltr / Hr  = HDS ISSUE QTY / RUNNING HRS (machine sheet).
+         - Working % = WORKING shifts / total shifts (log entries) for that machine.
+         - Shift buckets come from MC STATUS (Working/Idle/Breakdown/Maintenance/
+           Transit/Free Asset); every master row is one shift/log entry.
+         - Dashboard site block + Machine sheet sort by Total Production DESC with a
+           STABLE tie-break on first appearance in the source (Excel's sort), which is
+           what orders the zero-production sites/machines.
+         - Dashboard site attributes use SITE (CLEAN) = UPPER(TRIM(SITE LOCATION)),
+           which normalises a stray non-breaking space and a mixed-case location.
+         - Month Site Client sorts by SITE CODE then MONTH. Site wise sorts by code.
+       No row filtering anywhere: all 9,445 master rows feed every sheet. */
+    REPORTS.crusher = (function () {
+      const COLS = {
+        division: ['division'], lob: ['lob'], docNo: ['documentno'], date: ['date'],
+        saleOrder: ['saleorderno'], client: ['clientname'], siteCode: ['sitecode'],
+        siteLoc: ['sitelocation'], eqp: ['equipmentno'], desc: ['description'],
+        make: ['make'], model: ['model'], chasis: ['chasisno'], fleet: ['fleettype'],
+        startTime: ['starttime'], endTime: ['endtime'], shiftHrs: ['totalshifthrs'],
+        logsheet: ['logsheetno'], shift: ['shift'], startRd: ['startreading'],
+        endRd: ['endreading'], runHrs: ['runninghrs'], status: ['mcstatus'],
+        hds: ['hdsissueqty', 'hsdissueqty'], hsdFill: ['hsdfillingrd'], fuelScope: ['fuelscope'],
+        fullTank: ['fulltank'], hsdOpen: ['hsdopening'], hsdClose: ['hsdclosingqty'],
+        hsdCons: ['hsdconsumption'], fuelAvg: ['fuelaverage'],
+        prodGsb: ['productiongsb'], prodWmm: ['productionwmm'], prodAgg: ['productionaggregate'],
+        dispGsb: ['dispatchgsb'], dispWmm: ['dispatchwmm'], dispAgg: ['dispatchaggregate'],
+        docDate1: ['documentdate1'], userId: ['userid'], dateStamp: ['datestamp'],
+        month: ['month'], siteClean: ['siteclean'], siteCodeClean: ['sitecodeclean']
+      };
+      let MASTER_COLS = [];
+      const upk = v => String(v == null ? '' : v).trim().toUpperCase();
+      // SITE (CLEAN) rule from the workbook: UPPER(TRIM(x)) with non-breaking space folded.
+      const clean = v => String(v == null ? '' : v).replace(/\u00a0/g, ' ').trim().toUpperCase();
+      const MSTATUS = [['WORKING', 'working'], ['IDLE', 'idle'], ['BREAKDOWN', 'breakdown'],
+      ['MAINTENANCE', 'maintenance'], ['TRANSIT', 'transit'], ['FREE ASSET', 'freeAsset']];
+
+      function pickMasterAoa(wb) {
+        const names = wb.SheetNames || [];
+        const name = names.find(n => norm(n) === 'masterdata')
+          || names.find(n => norm(n).includes('master'))
+          || names.find(n => ['mainshet', 'mainsheet', 'data'].indexOf(norm(n)) !== -1)
+          || names[0];
+        return XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: '', raw: true });
+      }
+      // Excel serial / Date -> first day of that month (matches the MONTH column)
+      function monthStart(v) { const d = toDate(v); if (!(d instanceof Date) || isNaN(d)) return null; return new Date(d.getFullYear(), d.getMonth(), 1); }
+      const mKey = d => d ? d.getFullYear() * 12 + d.getMonth() : -1;
+      const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const mLabel = d => d ? MON[d.getMonth()] + '-' + d.getFullYear() : '\u2014';
+
+      function process(wb) {
+        const aoa = pickMasterAoa(wb); if (!aoa.length) throw new Error('The sheet is empty.');
+        const hi = findHeader(aoa, ['equipmentno', 'runninghrs', 'mcstatus', 'productiongsb']);
+        const headers = (aoa[hi] || []).map(String); const m = mapCols(headers, COLS);
+        for (const f of ['eqp', 'siteCode', 'runHrs', 'status'])
+          if (m[f] === undefined)
+            throw new Error('This does not look like a Crusher dump. Expected columns like Equipment No, '
+              + 'Site Code, Running Hrs, MC Status, Production/Dispatch (missing: ' + f + ').');
+
+        const NUMF = {
+          startRd: 1, endRd: 1, runHrs: 1, hds: 1, hsdFill: 1, hsdOpen: 1, hsdClose: 1, hsdCons: 1, fuelAvg: 1,
+          prodGsb: 1, prodWmm: 1, prodAgg: 1, dispGsb: 1, dispWmm: 1, dispAgg: 1, logsheet: 1, userId: 1
+        };
+        const DATEF = { date: 1, docDate1: 1, dateStamp: 1 }, MONF = { month: 1 }, TIMEF = { startTime: 1, endTime: 1, shiftHrs: 1 };
+        const fieldByIdx = {}; for (const f in m) if (m[f] != null) fieldByIdx[m[f]] = f;
+        MASTER_COLS = [];
+        headers.forEach((h, idx) => {
+          const f = fieldByIdx[idx]; if (!f) return;
+          MASTER_COLS.push({ key: f, header: String(h), idx: idx, num: !!NUMF[f], date: !!DATEF[f], mon: !!MONF[f], time: !!TIMEF[f] });
+        });
+        const masterIdx = MASTER_COLS.map(c => c.idx);
+        const S = i => i == null ? '' : String(aoaVal(i) == null ? '' : aoaVal(i)).trim();
+        let aoaRow = null; function aoaVal(i) { return aoaRow[i]; }
+
+        const rows = [];
+        for (let i = hi + 1; i < aoa.length; i++) {
+          const r = aoa[i]; if (!r || !r.length) continue; aoaRow = r;
+          const eqp = S(m.eqp), siteCode = S(m.siteCode);
+          if (!eqp && !siteCode && !numv(r[m.runHrs])) continue;   // skip blank spacer rows only
+          const d = toDate(r[m.date]);
+          const mo = m.month != null ? monthStart(r[m.month]) : monthStart(r[m.date]);
+          const pg = numv(r[m.prodGsb]), pw = numv(r[m.prodWmm]), pa = numv(r[m.prodAgg]);
+          const dg = numv(r[m.dispGsb]), dw = numv(r[m.dispWmm]), da = numv(r[m.dispAgg]);
+          rows.push({
+            division: S(m.division), lob: S(m.lob), docNo: S(m.docNo), date: d,
+            saleOrder: S(m.saleOrder), client: S(m.client), siteCode: siteCode, siteLoc: S(m.siteLoc),
+            eqp: eqp, desc: S(m.desc), make: S(m.make), model: S(m.model), chasis: S(m.chasis),
+            fleet: S(m.fleet), shift: S(m.shift), status: S(m.status),
+            startRd: numv(r[m.startRd]), endRd: numv(r[m.endRd]), runHrs: numv(r[m.runHrs]),
+            hds: numv(r[m.hds]), hsdCons: numv(r[m.hsdCons]), fuelAvg: numv(r[m.fuelAvg]),
+            prodGsb: pg, prodWmm: pw, prodAgg: pa, totProd: pg + pw + pa,
+            dispGsb: dg, dispWmm: dw, dispAgg: da, totDisp: dg + dw + da,
+            month: mo, monthLabel: mLabel(mo), mk: mKey(mo),
+            // SITE (CLEAN) column when present, else derived by the same rule
+            siteClean: m.siteClean != null ? String(r[m.siteClean] || '').trim() : clean(S(m.siteLoc)),
+            _m: masterIdx.map(ci => r[ci])
+          });
+        }
+        const eqps = new Set(rows.map(r => upk(r.eqp))).size, sites = new Set(rows.map(r => upk(r.siteCode))).size;
+        return { rows, note: `Read ${fmtN(rows.length)} log entries across ${fmtN(eqps)} machines and ${fmtN(sites)} sites.` };
+      }
+
+      /* ---- shared aggregation helpers (used by both the dashboard and the export) ---- */
+      const MEAS = ['runHrs', 'hds', 'prodGsb', 'prodWmm', 'prodAgg', 'totProd', 'dispGsb', 'dispWmm', 'dispAgg', 'totDisp'];
+      function blank() { const o = { n: 0 }; MEAS.forEach(k => o[k] = 0); return o; }
+      function addTo(o, r) { o.n++; MEAS.forEach(k => o[k] += (+r[k] || 0)); return o; }
+      // group by a key fn; keeps first-appearance order and first-seen attributes
+      function groupBy(data, keyFn, attrFn) {
+        const map = new Map();
+        for (let i = 0; i < data.length; i++) {
+          const r = data[i], k = keyFn(r);
+          let g = map.get(k);
+          if (!g) { g = blank(); g._k = k; g._i = map.size; if (attrFn) attrFn(g, r); map.set(k, g); }
+          addTo(g, r);
+        }
+        return [...map.values()];
+      }
+      // Excel's sort: measure DESC, stable tie-break on first appearance
+      const byDesc = f => (a, b) => (b[f] - a[f]) || (a._i - b._i);
+
+      function kpis(view) {
+        const nq = (a, k) => new Set(a.map(r => upk(r[k])).filter(v => v)).size;
+        const rh = sum(view, 'runHrs'), hd = sum(view, 'hds'), tp = sum(view, 'totProd');
+        const working = view.reduce((s, r) => s + (upk(r.status) === 'WORKING' ? 1 : 0), 0);
+        return [
+          ['Total Production', fmtN(tp, 2) + ' MT', 'GSB + WMM + aggregate', '#2f6db0'],
+          ['Total Dispatch', fmtN(sum(view, 'totDisp'), 2) + ' MT', 'dispatched quantity', '#1d9e75'],
+          ['Running Hrs', fmtN(rh, 2), 'total machine running hours', '#e08a1e'],
+          ['HSD Issued', fmtN(hd, 2) + ' L', 'diesel issued (HDS)', '#d8504c'],
+          ['Ltr / Hr', fmtN(rh ? hd / rh : 0, 2), 'diesel per running hour', '#7c5cbf'],
+          ['Ltr / MT', fmtN(tp ? hd / tp : 0, 2), 'diesel per MT produced', '#0891b2'],
+          ['Working %', fmtPct(view.length ? working / view.length : 0), 'working shifts share', '#1d9e75'],
+          ['Machines', fmtN(nq(view, 'eqp')), 'distinct equipment', '#2f6db0'],
+          ['Sites', fmtN(nq(view, 'siteCode')), 'distinct site codes', '#e08a1e'],
+          ['Log Entries', fmtN(view.length), 'shift records in view', '#8a98a4']
+        ];
+      }
+
+      function charts(view) {
+        const opts = g => ({ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, ...g });
+        const months = groupBy(view, r => r.mk, (g, r) => { g.lab = r.monthLabel; g.mk = r.mk; }).sort((a, b) => a.mk - b.mk);
+        const PIE = ['#2f6db0', '#1d9e75', '#e08a1e', '#7c5cbf', '#0891b2', '#d8504c', '#163a5c', '#4c9f70', '#c2708f', '#8a98a4'];
+        return [
+          {
+            title: 'Month-wise production vs dispatch', sub: 'MT per month', height: 310, legend: true, render(cv) {
+              cv._legend = '<span><i style="background:#2f6db0"></i>Production</span><span><i style="background:#1d9e75"></i>Dispatch</span>';
+              return new Chart(cv, {
+                type: 'bar', data: {
+                  labels: months.map(m => m.lab), datasets: [
+                    { label: 'Production', data: months.map(m => +m.totProd.toFixed(2)), backgroundColor: '#2f6db0', borderRadius: 5 },
+                    { label: 'Dispatch', data: months.map(m => +m.totDisp.toFixed(2)), backgroundColor: '#1d9e75', borderRadius: 5 }]
+                },
+                options: opts({ scales: { y: { ticks: { callback: v => fmtN(v) } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => c.dataset.label + ': ' + fmtN(c.parsed.y, 2) + ' MT' } } } })
+              });
+            }
+          },
+          {
+            title: 'Machine status split', sub: 'share of shifts by MC status', height: 310, legend: true, render(cv) {
+              const map = new Map();
+              view.forEach(r => { const k = upk(r.status) || '\u2014'; map.set(k, (map.get(k) || 0) + 1); });
+              const e = [...map.entries()].sort((a, b) => b[1] - a[1]); const tot = view.length || 1;
+              cv._legend = e.map((x, i) => `<span><i style="background:${PIE[i % PIE.length]}"></i>${x[0]} ${fmtPct(x[1] / tot)}</span>`).join('');
+              return new Chart(cv, { type: 'doughnut', data: { labels: e.map(x => x[0]), datasets: [{ data: e.map(x => x[1]), backgroundColor: e.map((x, i) => PIE[i % PIE.length]), borderWidth: 2, borderColor: '#fff' }] }, options: opts({ cutout: '58%', plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => c.label + ': ' + fmtN(c.parsed) + ' shifts (' + fmtPct(c.parsed / tot) + ')' } } } }) });
+            }
+          },
+          {
+            title: 'Top 12 sites by production', sub: 'MT produced', height: 340, render(cv) {
+              const e = groupBy(view, r => upk(r.siteCode), (g, r) => g.lab = r.siteCode).sort(byDesc('totProd')).slice(0, 12);
+              return new Chart(cv, { type: 'bar', data: { labels: e.map(x => x.lab), datasets: [{ data: e.map(x => +x.totProd.toFixed(2)), backgroundColor: '#163a5c', borderRadius: 5 }] }, options: opts({ indexAxis: 'y', scales: { x: { ticks: { callback: v => fmtN(v) } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => fmtN(c.parsed.x, 2) + ' MT' } } } }) });
+            }
+          },
+          {
+            title: 'Top 12 machines by running hrs', sub: 'hours logged', height: 340, render(cv) {
+              const e = groupBy(view, r => upk(r.eqp), (g, r) => g.lab = r.eqp).sort(byDesc('runHrs')).slice(0, 12);
+              return new Chart(cv, { type: 'bar', data: { labels: e.map(x => x.lab), datasets: [{ data: e.map(x => +x.runHrs.toFixed(2)), backgroundColor: '#0891b2', borderRadius: 5 }] }, options: opts({ indexAxis: 'y', scales: { x: { ticks: { callback: v => fmtN(v) } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => fmtN(c.parsed.x, 2) + ' hrs' } } } }) });
+            }
+          },
+          {
+            title: 'Production mix', sub: 'GSB vs WMM vs aggregate', height: 300, legend: true, render(cv) {
+              const labs = ['GSB', 'WMM', 'Aggregate'], vals = [sum(view, 'prodGsb'), sum(view, 'prodWmm'), sum(view, 'prodAgg')];
+              const tot = vals.reduce((a, b) => a + b, 0) || 1;
+              cv._legend = labs.map((l, i) => `<span><i style="background:${PIE[i]}"></i>${l} ${fmtPct(vals[i] / tot)}</span>`).join('');
+              return new Chart(cv, { type: 'pie', data: { labels: labs, datasets: [{ data: vals.map(v => +v.toFixed(2)), backgroundColor: PIE.slice(0, 3), borderWidth: 2, borderColor: '#fff' }] }, options: opts({ plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => c.label + ': ' + fmtN(c.parsed, 2) + ' MT (' + fmtPct(c.parsed / tot) + ')' } } } }) });
+            }
+          },
+          {
+            title: 'Monthly diesel efficiency', sub: 'litres per MT produced', height: 300, render(cv) {
+              return new Chart(cv, { type: 'line', data: { labels: months.map(m => m.lab), datasets: [{ data: months.map(m => +(m.totProd ? m.hds / m.totProd : 0).toFixed(3)), borderColor: '#d8504c', backgroundColor: 'rgba(216,80,76,.14)', fill: true, tension: .35, pointRadius: 4 }] }, options: opts({ scales: { y: { ticks: { callback: v => fmtN(v, 2) } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => fmtN(c.parsed.y, 2) + ' Ltr/MT' } } } }) });
+            }
+          }
+        ];
+      }
+
+      const columns = [
+        { key: '_sr', label: 'Sr No', type: 'sr' },
+        { key: 'date', label: 'Date', type: 'date' }, { key: 'monthLabel', label: 'Month', type: 'text' },
+        { key: 'docNo', label: 'Document No', type: 'text' }, { key: 'client', label: 'Client Name', type: 'text' },
+        { key: 'siteCode', label: 'Site Code', type: 'text' }, { key: 'siteLoc', label: 'Site Location', type: 'text' },
+        { key: 'eqp', label: 'Equipment No', type: 'text' }, { key: 'fleet', label: 'Fleet Type', type: 'text' },
+        { key: 'make', label: 'Make', type: 'text' }, { key: 'model', label: 'Model', type: 'text' },
+        { key: 'shift', label: 'Shift', type: 'text' }, { key: 'status', label: 'MC Status', type: 'text' },
+        { key: 'runHrs', label: 'Running Hrs', type: 'num2' }, { key: 'hds', label: 'HDS Issue Qty', type: 'num2' },
+        { key: 'prodGsb', label: 'Production-GSB', type: 'num2' }, { key: 'prodWmm', label: 'Production-WMM', type: 'num2' },
+        { key: 'prodAgg', label: 'Production-Aggregate', type: 'num2' }, { key: 'totProd', label: 'Total Production', type: 'num2' },
+        { key: 'dispGsb', label: 'Dispatch-GSB', type: 'num2' }, { key: 'dispWmm', label: 'Dispatch-WMM', type: 'num2' },
+        { key: 'dispAgg', label: 'Dispatch-Aggregate', type: 'num2' }, { key: 'totDisp', label: 'Total Dispatch', type: 'num2' },
+        { key: 'lob', label: 'LOB', type: 'text' }
+      ];
+      const tableColumns = columns.map(c => ({ key: c.key, label: c.label, fmt: c.type === 'sr' ? 'sr' : c.type === 'num2' ? 'num2' : c.type === 'date' ? 'date' : 'text' }));
+      const filters = [
+        { key: 'monthLabel', label: 'Month', multi: true, sort: 'month' },
+        { key: 'client', label: 'Client', multi: true }, { key: 'siteCode', label: 'Site Code', multi: true },
+        { key: 'eqp', label: 'Equipment', multi: true }, { key: 'fleet', label: 'Fleet Type', multi: true },
+        { key: 'make', label: 'Make', multi: true }, { key: 'status', label: 'MC Status', multi: true },
+        { key: 'shift', label: 'Shift', multi: true }, { key: 'lob', label: 'LOB', multi: true }
+      ];
+
+      /* ---------------- Excel export: Master Data + 4 report sheets ---------------- */
+      const INT0 = '#,##,##0;\\(#,##,##0\\);"-"';   // Indian grouping (reference used #,##0)
+      const NUM2 = '#,##,##0.00';
+      const ACC2 = '_ * #,##,##0.00_ ;_ * \\-#,##,##0.00_ ;_ * "-"??_ ;_ @_ ';
+      async function exportExcel(fileName) {
+        const data = (typeof VIEW !== 'undefined' && Array.isArray(VIEW)) ? VIEW : RAW;
+        const wb = new ExcelJS.Workbook(); wb.creator = COMPANY.name; wb.created = new Date();
+        const HEAD = 'FF0E2A43', THIN = { style: 'thin', color: { argb: 'FFBFC8D4' } };
+        const bd = { top: THIN, left: THIN, bottom: THIN, right: THIN };
+        const ALT = 'FFF6F9FC', TOTBG = 'FFDCE6F4';
+        const hCell = (cell, t) => { cell.value = t; cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11, name: 'Calibri' }; cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEAD } }; cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }; cell.border = bd; };
+        const tCell = (cell, v, o) => { cell.value = v; cell.border = bd; cell.font = { size: 10.5, name: 'Calibri', bold: !!(o && o.bold) }; cell.alignment = { horizontal: 'left' }; if (o && o.fill) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: o.fill } }; };
+        const nCell = (cell, v, o) => { cell.value = (v === null || v === undefined) ? null : v; cell.numFmt = (o && o.fmt) || NUM2; cell.border = bd; cell.font = { size: 10.5, name: 'Calibri', bold: !!(o && o.bold) }; cell.alignment = { horizontal: 'right' }; if (o && o.fill) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: o.fill } }; };
+        const title = (ws, cell, t) => { const c = ws.getCell(cell); c.value = t; c.font = { bold: true, size: 12.5, name: 'Calibri', color: { argb: 'FF0E2A43' } }; };
+
+        /* ===== 1. Master Data (exact echo of the uploaded ERP sheet) ===== */
+        const mcols = (MASTER_COLS && MASTER_COLS.length) ? MASTER_COLS
+          : columns.filter(c => c.type !== 'sr').map(c => ({ key: c.key, header: c.label, num: c.type === 'num2', date: c.type === 'date' }));
+        const wsM = wb.addWorksheet('Master Data', { views: [{ state: 'frozen', ySplit: 1 }] });
+        mcols.forEach((c, i) => hCell(wsM.getRow(1).getCell(i + 1), c.header));
+        for (let ri = 0; ri < data.length; ri++) {
+          const r = data[ri], row = wsM.getRow(ri + 2), rm = (r._m && r._m.length === mcols.length) ? r._m : null;
+          for (let i = 0; i < mcols.length; i++) {
+            const c = mcols[i], v = rm ? rm[i] : r[c.key], cell = row.getCell(i + 1);
+            if (c.num) cell.value = (v === '' || v == null) ? null : (+v || 0);
+            else if (c.date || c.mon) { const d = toDate(v); cell.value = (d instanceof Date && !isNaN(d)) ? new Date(d.getTime() - d.getTimezoneOffset() * 60000) : (v == null ? '' : v); }
+            else cell.value = (v == null ? '' : v);
+          }
+        }
+        mcols.forEach((c, i) => {
+          const col = wsM.getColumn(i + 1);
+          col.width = c.num ? 15 : Math.min(Math.max(String(c.header).length + 2, 12), 34);
+          if (c.num) col.numFmt = NUM2; else if (c.mon) col.numFmt = 'mmm-yy'; else if (c.date) col.numFmt = 'dd-mmm-yyyy';
+        });
+        wsM.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: mcols.length } };
+
+        /* ---- shared aggregates ---- */
+        const months = groupBy(data, r => r.mk, (g, r) => { g.mo = r.month; g.mk = r.mk; }).sort((a, b) => a.mk - b.mk);
+        const sitesA = groupBy(data, r => upk(r.siteCode), (g, r) => { g.code = r.siteCode; g.loc = r.siteClean; g.client = r.client; g.lob = r.lob; });
+        const sitesByProd = sitesA.slice().sort(byDesc('totProd'));
+        const grand = blank(); data.forEach(r => addTo(grand, r));
+
+        /* ===== 2. Dashboard ===== */
+        const ws1 = wb.addWorksheet('Dashboard', { views: [{ showGridLines: false }] });
+        title(ws1, 'B2', 'PRODUCTION & DISPATCH MIS');
+        const per = months.length ? (mLabel(months[0].mo) + ' to ' + mLabel(months[months.length - 1].mo)) : '';
+        { const c = ws1.getCell('B3'); c.value = 'Data period: ' + per; c.font = { size: 10.5, name: 'Calibri', italic: true, color: { argb: 'FF5A6B7B' } }; }
+        title(ws1, 'B5', '1. MONTH-WISE PRODUCTION & DISPATCH');
+        const h1 = ['Month', 'Prod GSB', 'Prod WMM', 'Prod Aggregate', 'Total Production', 'Disp GSB', 'Disp WMM', 'Disp Aggregate', 'Total Dispatch', 'Running Hrs', 'HSD Issued (Ltr)', 'Ltr / MT'];
+        h1.forEach((t, i) => hCell(ws1.getRow(6).getCell(2 + i), t));
+        let R = 7;
+        months.forEach((g, i) => {
+          const row = ws1.getRow(R), fill = i % 2 ? ALT : null;
+          const d = g.mo; const c1 = row.getCell(2);
+          c1.value = d ? new Date(d.getTime() - d.getTimezoneOffset() * 60000) : ''; c1.numFmt = 'mmm-yy';
+          c1.border = bd; c1.font = { size: 10.5, name: 'Calibri' }; if (fill) c1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } };
+          [g.prodGsb, g.prodWmm, g.prodAgg, g.totProd, g.dispGsb, g.dispWmm, g.dispAgg, g.totDisp, g.runHrs, g.hds]
+            .forEach((v, j) => nCell(row.getCell(3 + j), v, { fill }));
+          nCell(row.getCell(13), g.totProd ? g.hds / g.totProd : 0, { fill, fmt: '0.00' });
+          R++;
+        });
+        { const row = ws1.getRow(R); tCell(row.getCell(2), 'TOTAL', { bold: true, fill: TOTBG }); [grand.prodGsb, grand.prodWmm, grand.prodAgg, grand.totProd, grand.dispGsb, grand.dispWmm, grand.dispAgg, grand.totDisp, grand.runHrs, grand.hds].forEach((v, j) => nCell(row.getCell(3 + j), v, { bold: true, fill: TOTBG })); nCell(row.getCell(13), grand.totProd ? grand.hds / grand.totProd : 0, { bold: true, fill: TOTBG, fmt: '0.00' }); }
+        // section 2 (site-wise) starts three rows below the month block, as in the reference
+        let S0 = R + 3;
+        title(ws1, 'B' + S0, '2. SITE-WISE PRODUCTION & DISPATCH');
+        const h2 = ['Site Code', 'Prod GSB', 'Prod WMM', 'Prod Aggregate', 'Total Production', 'Disp GSB', 'Disp WMM', 'Disp Aggregate', 'Total Dispatch', 'Running Hrs', 'HSD Issued (Ltr)', 'Log Entries', 'Site Location', 'Client', 'LOB'];
+        h2.forEach((t, i) => hCell(ws1.getRow(S0 + 1).getCell(2 + i), t));
+        let SR = S0 + 2;
+        sitesByProd.forEach((g, i) => {
+          const row = ws1.getRow(SR), fill = i % 2 ? ALT : null;
+          tCell(row.getCell(2), g.code, { fill });
+          [g.prodGsb, g.prodWmm, g.prodAgg, g.totProd, g.dispGsb, g.dispWmm, g.dispAgg, g.totDisp, g.runHrs, g.hds].forEach((v, j) => nCell(row.getCell(3 + j), v, { fill }));
+          nCell(row.getCell(13), g.n, { fill, fmt: INT0 });
+          tCell(row.getCell(14), g.loc, { fill }); tCell(row.getCell(15), g.client, { fill }); tCell(row.getCell(16), g.lob, { fill });
+          SR++;
+        });
+        { const row = ws1.getRow(SR); tCell(row.getCell(2), 'TOTAL', { bold: true, fill: TOTBG }); [grand.prodGsb, grand.prodWmm, grand.prodAgg, grand.totProd, grand.dispGsb, grand.dispWmm, grand.dispAgg, grand.totDisp, grand.runHrs, grand.hds].forEach((v, j) => nCell(row.getCell(3 + j), v, { bold: true, fill: TOTBG })); nCell(row.getCell(13), grand.n, { bold: true, fill: TOTBG, fmt: INT0 }); tCell(row.getCell(14), '', { bold: true, fill: TOTBG }); tCell(row.getCell(15), '', { bold: true, fill: TOTBG }); tCell(row.getCell(16), '', { bold: true, fill: TOTBG }); }
+        { const c = ws1.getCell('B' + (SR + 2)); c.value = 'Note: Site table is keyed on SITE CODE; location, client and LOB are taken from the first log entry for that site.'; c.font = { size: 9.5, name: 'Calibri', italic: true, color: { argb: 'FF7A8894' } }; }
+        ws1.getColumn(2).width = 30; for (let c = 3; c <= 13; c++) ws1.getColumn(c).width = 16; ws1.getColumn(14).width = 20; ws1.getColumn(15).width = 34; ws1.getColumn(16).width = 12;
+
+        /* ===== 3. Month Site Client ===== */
+        const ws2 = wb.addWorksheet('Month Site Client', { views: [{ state: 'frozen', ySplit: 3 }] });
+        title(ws2, 'A1', 'MONTH-WISE / SITE CODE / CLIENT SUMMARY');
+        const h3 = ['MONTH', 'SITE CODE', 'CLIENT', 'SITE LOCATION', 'TOTAL RUNNING HRS', 'HDS ISSUE QTY', 'PRODUCTION-GSB', 'PRODUCTION-WMM', 'PRODUCTION-AGGREGATE', 'TOTAL PRODUCTION', 'DISPATCH-GSB', 'DISPATCH-WMM', 'DISPATCH-AGGREGATE', 'TOTAL DISPATCH', 'LOG ENTRIES'];
+        h3.forEach((t, i) => hCell(ws2.getRow(3).getCell(1 + i), t));
+        // SITE LOCATION here is the CLEAN variant (UPPER/TRIM), as in the reference sheet.
+        const msc = groupBy(data, r => r.mk + '\u00A6' + upk(r.siteCode) + '\u00A6' + upk(r.client) + '\u00A6' + upk(r.siteClean),
+          (g, r) => { g.mo = r.month; g.mk = r.mk; g.code = r.siteCode; g.client = r.client; g.loc = r.siteClean; g.ks = upk(r.siteCode); })
+          .sort((a, b) => (a.ks < b.ks ? -1 : a.ks > b.ks ? 1 : 0) || (a.mk - b.mk) || (a._i - b._i));
+        let r2 = 4;
+        msc.forEach((g, i) => {
+          const row = ws2.getRow(r2), fill = i % 2 ? ALT : null;
+          const d = g.mo, c1 = row.getCell(1);
+          c1.value = d ? new Date(d.getTime() - d.getTimezoneOffset() * 60000) : ''; c1.numFmt = 'mmm-yy'; c1.border = bd; c1.font = { size: 10.5, name: 'Calibri' }; if (fill) c1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } };
+          tCell(row.getCell(2), g.code, { fill }); tCell(row.getCell(3), g.client, { fill }); tCell(row.getCell(4), g.loc, { fill });
+          [g.runHrs, g.hds, g.prodGsb, g.prodWmm, g.prodAgg, g.totProd, g.dispGsb, g.dispWmm, g.dispAgg, g.totDisp].forEach((v, j) => nCell(row.getCell(5 + j), v, { fill }));
+          nCell(row.getCell(15), g.n, { fill, fmt: INT0 }); r2++;
+        });
+        { const row = ws2.getRow(r2); tCell(row.getCell(1), 'TOTAL', { bold: true, fill: TOTBG }); [2, 3, 4].forEach(c => tCell(row.getCell(c), '', { bold: true, fill: TOTBG })); [grand.runHrs, grand.hds, grand.prodGsb, grand.prodWmm, grand.prodAgg, grand.totProd, grand.dispGsb, grand.dispWmm, grand.dispAgg, grand.totDisp].forEach((v, j) => nCell(row.getCell(5 + j), v, { bold: true, fill: TOTBG })); nCell(row.getCell(15), grand.n, { bold: true, fill: TOTBG, fmt: INT0 }); }
+        ws2.getColumn(1).width = 12; ws2.getColumn(2).width = 26; ws2.getColumn(3).width = 34; ws2.getColumn(4).width = 18; for (let c = 5; c <= 15; c++) ws2.getColumn(c).width = 17;
+
+        /* ===== 4. Machine wise ===== */
+        const ws3 = wb.addWorksheet('Machine wise', { views: [{ state: 'frozen', ySplit: 3 }] });
+        title(ws3, 'A1', 'MACHINE-WISE RUNNING HRS, STATUS, PRODUCTION & DISPATCH');
+        { const c = ws3.getCell('J2'); c.value = 'MC STATUS - SHIFT / DAY COUNT'; c.font = { bold: true, size: 10.5, name: 'Calibri', color: { argb: 'FF5A6B7B' } }; }
+        { const c = ws3.getCell('R2'); c.value = 'PRODUCTION (MT)'; c.font = { bold: true, size: 10.5, name: 'Calibri', color: { argb: 'FF5A6B7B' } }; }
+        { const c = ws3.getCell('V2'); c.value = 'DISPATCH (MT)'; c.font = { bold: true, size: 10.5, name: 'Calibri', color: { argb: 'FF5A6B7B' } }; }
+        const h4 = ['EQUIPMENT NO', 'FLEET TYPE', 'MAKE', 'MODEL', 'SITE CODE', 'CLIENT', 'TOTAL RUNNING HRS', 'HDS ISSUE QTY', 'LTR / HR', 'WORKING', 'IDLE', 'BREAKDOWN', 'MAINTENANCE', 'TRANSIT', 'FREE ASSET', 'TOTAL SHIFTS', 'WORKING %', 'PRODUCTION-GSB', 'PRODUCTION-WMM', 'PRODUCTION-AGGREGATE', 'TOTAL PRODUCTION', 'DISPATCH-GSB', 'DISPATCH-WMM', 'DISPATCH-AGGREGATE', 'TOTAL DISPATCH'];
+        h4.forEach((t, i) => hCell(ws3.getRow(3).getCell(1 + i), t));
+        const mach = groupBy(data, r => upk(r.eqp), (g, r) => { g.eqp = r.eqp; g.fleet = r.fleet; g.make = r.make; g.model = r.model; g.code = r.siteCode; g.client = r.client; MSTATUS.forEach(s => g[s[1]] = 0); });
+        // status buckets
+        const mIdx = new Map(); mach.forEach(g => mIdx.set(g._k, g));
+        data.forEach(r => { const g = mIdx.get(upk(r.eqp)); if (!g) return; const s = upk(r.status); for (let i = 0; i < MSTATUS.length; i++) if (MSTATUS[i][0] === s) { g[MSTATUS[i][1]]++; break; } });
+        const machSorted = mach.slice().sort(byDesc('totProd'));
+        let r3 = 4; const tot3 = { working: 0, idle: 0, breakdown: 0, maintenance: 0, transit: 0, freeAsset: 0 };
+        machSorted.forEach((g, i) => {
+          const row = ws3.getRow(r3), fill = i % 2 ? ALT : null;
+          [g.eqp, g.fleet, g.make, g.model, g.code, g.client].forEach((v, j) => tCell(row.getCell(1 + j), v, { fill }));
+          nCell(row.getCell(7), g.runHrs, { fill }); nCell(row.getCell(8), g.hds, { fill });
+          nCell(row.getCell(9), g.runHrs ? g.hds / g.runHrs : 0, { fill, fmt: '0.0' });
+          MSTATUS.forEach((s, j) => { nCell(row.getCell(10 + j), g[s[1]], { fill, fmt: INT0 }); tot3[s[1]] += g[s[1]]; });
+          nCell(row.getCell(16), g.n, { fill, fmt: INT0 });
+          nCell(row.getCell(17), g.n ? g.working / g.n : 0, { fill, fmt: '0.0%' });
+          [g.prodGsb, g.prodWmm, g.prodAgg, g.totProd, g.dispGsb, g.dispWmm, g.dispAgg, g.totDisp].forEach((v, j) => nCell(row.getCell(18 + j), v, { fill }));
+          r3++;
+        });
+        { const row = ws3.getRow(r3); tCell(row.getCell(1), 'TOTAL', { bold: true, fill: TOTBG }); [2, 3, 4, 5, 6].forEach(c => tCell(row.getCell(c), '', { bold: true, fill: TOTBG })); nCell(row.getCell(7), grand.runHrs, { bold: true, fill: TOTBG }); nCell(row.getCell(8), grand.hds, { bold: true, fill: TOTBG }); nCell(row.getCell(9), grand.runHrs ? grand.hds / grand.runHrs : 0, { bold: true, fill: TOTBG, fmt: '0.0' }); MSTATUS.forEach((s, j) => nCell(row.getCell(10 + j), tot3[s[1]], { bold: true, fill: TOTBG, fmt: INT0 })); nCell(row.getCell(16), grand.n, { bold: true, fill: TOTBG, fmt: INT0 }); nCell(row.getCell(17), grand.n ? tot3.working / grand.n : 0, { bold: true, fill: TOTBG, fmt: '0.0%' }); [grand.prodGsb, grand.prodWmm, grand.prodAgg, grand.totProd, grand.dispGsb, grand.dispWmm, grand.dispAgg, grand.totDisp].forEach((v, j) => nCell(row.getCell(18 + j), v, { bold: true, fill: TOTBG })); }
+        { const c = ws3.getCell('A' + (r3 + 2)); c.value = 'Note: SITE CODE / CLIENT are taken from the first log entry for that machine.'; c.font = { size: 9.5, name: 'Calibri', italic: true, color: { argb: 'FF7A8894' } }; }
+        ws3.getColumn(1).width = 16; ws3.getColumn(2).width = 18; ws3.getColumn(3).width = 14; ws3.getColumn(4).width = 22; ws3.getColumn(5).width = 24; ws3.getColumn(6).width = 32; for (let c = 7; c <= 25; c++) ws3.getColumn(c).width = 15;
+
+        /* ===== 5. Site wise ===== */
+        const ws4 = wb.addWorksheet('Site wise ', { views: [{ state: 'frozen', ySplit: 3 }] });
+        title(ws4, 'A1', 'SITE-WISE SUMMARY');
+        const h5 = ['SITE CODE', 'TOTAL RUNNING HRS', 'HDS ISSUE QTY', 'PRODUCTION-GSB', 'PRODUCTION-WMM', 'PRODUCTION-AGGREGATE', 'TOTAL PRODUCTION', 'DISPATCH-GSB', 'DISPATCH-WMM', 'DISPATCH-AGGREGATE', 'TOTAL DISPATCH'];
+        h5.forEach((t, i) => hCell(ws4.getRow(3).getCell(1 + i), t));
+        const siteSorted = sitesA.slice().sort((a, b) => (a._k < b._k ? -1 : a._k > b._k ? 1 : 0));
+        let r4 = 4;
+        siteSorted.forEach((g, i) => {
+          const row = ws4.getRow(r4), fill = i % 2 ? ALT : null;
+          tCell(row.getCell(1), g.code, { fill });
+          [g.runHrs, g.hds, g.prodGsb, g.prodWmm, g.prodAgg, g.totProd, g.dispGsb, g.dispWmm, g.dispAgg, g.totDisp].forEach((v, j) => nCell(row.getCell(2 + j), v, { fill, fmt: ACC2 }));
+          r4++;
+        });
+        { const row = ws4.getRow(r4); tCell(row.getCell(1), 'Grand Total', { bold: true, fill: TOTBG }); [grand.runHrs, grand.hds, grand.prodGsb, grand.prodWmm, grand.prodAgg, grand.totProd, grand.dispGsb, grand.dispWmm, grand.dispAgg, grand.totDisp].forEach((v, j) => nCell(row.getCell(2 + j), v, { bold: true, fill: TOTBG, fmt: ACC2 })); }
+        ws4.getColumn(1).width = 28; for (let c = 2; c <= 11; c++) ws4.getColumn(c).width = 18;
+
+        const buf = await wb.xlsx.writeBuffer();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+        a.download = fileName; a.click();
+      }
+
+      return {
+        meta: {
+          name: 'Crusher Report',
+          tagline: 'Crusher production, dispatch, running hours & diesel \u2014 by month, site, client and machine',
+          icon: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M21 3h-5"/><path d="M21 3v5"/><path d="M3 21h18"/></svg>'
+        },
+        hint: 'Upload the ERP <b>Master Data</b> sheet (Equipment No, Site Code, Client, Running Hrs, MC Status and the Production / Dispatch columns). Filter by month, site, client, machine, fleet type or MC status. The Excel export rebuilds <b>Master Data</b>, <b>Dashboard</b>, <b>Month Site Client</b>, <b>Machine wise</b> and <b>Site wise</b> exactly as the reference workbook.',
+        sheetName: 'Crusher Report', exportName: 'VisionInfra-Crusher-Report',
+        process, kpis, charts, columns, tableColumns, filters, cascadeFilters: true,
+        searchKeys: ['docNo', 'client', 'siteCode', 'siteLoc', 'eqp', 'fleet', 'make', 'model', 'status', 'shift', 'monthLabel'],
         exportExcel
       };
     })();

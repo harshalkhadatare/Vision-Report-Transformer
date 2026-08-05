@@ -43,7 +43,8 @@ const REPORT_NAMES = {
   pogin: 'PO-GIN-BILL-PAYMENT',
   ageing: 'Ageing Report Analysis',
   sales: 'Sales Dashboard',
-  bin: 'Bin / Equipment Values'
+  bin: 'Bin / Equipment Values',
+  crusher: 'Crusher Report'
 };
 
 // Administrator contacts shown at the bottom of every alert.
