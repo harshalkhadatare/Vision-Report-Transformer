@@ -42,7 +42,8 @@ const REPORT_NAMES = {
   stock: 'Stock Report',
   pogin: 'PO-GIN-BILL-PAYMENT',
   ageing: 'Ageing Report Analysis',
-  sales: 'Sales Dashboard'
+  sales: 'Sales Dashboard',
+  bin: 'Bin / Equipment Values'
 };
 
 // Administrator contacts shown at the bottom of every alert.

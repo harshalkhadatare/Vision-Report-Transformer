@@ -3590,7 +3590,7 @@
     }
     /* ===================== REPORT CATEGORIES + SIDEBAR NAV ===================== */
     const REPORT_CATEGORIES = [
-      { id: 'pm', label: 'P&M Reports', icon: '\uD83D\uDCC2', reports: ['rental', 'milling'] },
+      { id: 'pm', label: 'P&M Reports', icon: '\uD83D\uDCC2', reports: ['rental', 'milling', 'bin'] },
       { id: 'store', label: 'Purchase & Store', icon: '\uD83D\uDCC2', reports: ['stock', 'pogin', 'ageing'] },
       { id: 'sales', label: 'Sales', icon: '\uD83D\uDCC2', reports: ['sales'] }
     ];
@@ -6232,6 +6232,342 @@
       };
     })();
 
+
+    /* ===================== BIN / EQUIPMENT VALUES REPORT ===================== */
+    /* Reverse-engineered from BIN_BY_VALUE.xlsx (Master Sheet -> R1, R2, R3),
+       validated to the paisa: closing grand total 170,696,654.09 reconciles on
+       every sheet. All grouping is CALENDAR-agnostic (no dates) and CASE-
+       INSENSITIVE, matching Excel PivotTable behaviour (e.g. MILLING + Milling
+       collapse to one group, shown in the first-seen casing). Every master row is
+       included — the reference applies no row filter. Cross-tab cells are blank
+       when no record exists for that combination and 0 when records net to zero. */
+    REPORTS.bin = (function () {
+      // Master Sheet columns resolved by normalised header NAME (robust to ordering/drift).
+      const COLS = {
+        site: ['sitecode'], location: ['locationcode'], itemCode: ['itemcode'],
+        itemDesc: ['itemdescription'], itemClass: ['itemclass'], unauth: ['unauthorizedqty'],
+        binCode: ['bincodoe', 'bincode'], binDesc: ['bindescription'],
+        openQty: ['openingqty'], recvQty: ['receiptquantitypodc', 'receiptquantity'],
+        issueQty: ['issueqtyeqpdc', 'issueqty'], closeQty: ['closingqty'], rate: ['unitrate'],
+        openVal: ['openingvalue'], recvVal: ['receiptvaluepodc', 'receiptvalue'],
+        issueVal: ['issuevalueeqpdc', 'issuevalue'], closeVal: ['closingvalue'],
+        eqp: ['eqpcode'], dept: ['department'], fleet: ['fleetdescription']
+      };
+      const BLANK = '(blank)';
+      const txt = v => { const s = String(v == null ? '' : v).trim(); return s || BLANK; };
+      // grouping key + display: case-insensitive key, first-seen casing for display
+      const upk = v => String(v == null ? '' : v).trim().toUpperCase();
+      // Master export columns in ORIGINAL file order (header text + row key), set by process()
+      // so the exported "Master" tab echoes the uploaded ERP sheet exactly.
+      let MASTER_COLS = [];
+
+      // The reference workbook ships R1,R2,R3 BEFORE the Master Sheet, so the first
+      // sheet is NOT the data. Pick the master sheet explicitly, then fall back.
+      function pickMasterAoa(wb) {
+        const names = wb.SheetNames || [];
+        let name = names.find(n => norm(n).includes('master'))
+          || names.find(n => ['mainshet', 'mainsheet', 'data', 'binbyvalue'].indexOf(norm(n)) !== -1)
+          || names[0];
+        return XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: '', raw: true });
+      }
+
+      function process(wb) {
+        const aoa = pickMasterAoa(wb); if (!aoa.length) throw new Error('The sheet is empty.');
+        const hi = findHeader(aoa, ['closingvalue', 'sitecode', 'eqpcode', 'fleetdescription']);
+        const headers = (aoa[hi] || []).map(String); const m = mapCols(headers, COLS);
+        for (const f of ['closeVal', 'dept', 'fleet', 'site'])
+          if (m[f] === undefined)
+            throw new Error('This does not look like a Bin/Equipment Values dump. Expected columns like '
+              + 'Site Code, Department, Fleet Description, Closing Value (missing: ' + f + ').');
+
+        // Capture master columns in ORIGINAL file order (original header text + our row key +
+        // whether it is numeric / a financial value) so the "Master" export tab is an exact echo.
+        const NUMF = { unauth: 1, openQty: 1, recvQty: 1, issueQty: 1, closeQty: 1, rate: 1, openVal: 1, recvVal: 1, issueVal: 1, closeVal: 1 };
+        const MONEYF = { rate: 1, openVal: 1, recvVal: 1, issueVal: 1, closeVal: 1 };
+        const fieldByIdx = {}; for (const f in m) if (m[f] != null) fieldByIdx[m[f]] = f;
+        MASTER_COLS = [];
+        headers.forEach((h, idx) => { const f = fieldByIdx[idx]; if (f) MASTER_COLS.push({ key: f, header: String(h), idx: idx, num: !!NUMF[f], money: !!MONEYF[f] }); });
+        const masterIdx = MASTER_COLS.map(c => c.idx);   // raw cell indices, in file order, for the exact echo
+
+        const rows = [];
+        for (let i = hi + 1; i < aoa.length; i++) {
+          const r = aoa[i]; if (!r || !r.length) continue;
+          // skip a fully blank spacer row (never drops real data — real lines carry a site/eqp/value)
+          const site = m.site != null ? String(r[m.site] == null ? '' : r[m.site]).trim() : '';
+          const eqp = m.eqp != null ? String(r[m.eqp] == null ? '' : r[m.eqp]).trim() : '';
+          const dept = m.dept != null ? String(r[m.dept] == null ? '' : r[m.dept]).trim() : '';
+          const closeV = numv(r[m.closeVal]);
+          if (!site && !eqp && !dept && !closeV && !numv(r[m.openVal]) && !numv(r[m.recvVal])) continue;
+          rows.push({
+            site: site, location: m.location != null ? String(r[m.location] == null ? '' : r[m.location]).trim() : '',
+            itemCode: m.itemCode != null ? String(r[m.itemCode] == null ? '' : r[m.itemCode]).trim() : '',
+            itemDesc: m.itemDesc != null ? String(r[m.itemDesc] == null ? '' : r[m.itemDesc]).trim() : '',
+            itemClass: m.itemClass != null ? String(r[m.itemClass] == null ? '' : r[m.itemClass]).trim() : '',
+            binCode: m.binCode != null ? String(r[m.binCode] == null ? '' : r[m.binCode]).trim() : '',
+            binDesc: m.binDesc != null ? String(r[m.binDesc] == null ? '' : r[m.binDesc]).trim() : '',
+            eqp: eqp, dept: dept, fleet: m.fleet != null ? String(r[m.fleet] == null ? '' : r[m.fleet]).trim() : '',
+            unauth: numv(r[m.unauth]),
+            openQty: numv(r[m.openQty]), recvQty: numv(r[m.recvQty]), issueQty: numv(r[m.issueQty]),
+            closeQty: numv(r[m.closeQty]), rate: numv(r[m.rate]),
+            openVal: numv(r[m.openVal]), recvVal: numv(r[m.recvVal]), issueVal: numv(r[m.issueVal]), closeVal: closeV,
+            _m: masterIdx.map(ci => r[ci])   // untrimmed raw values (exact echo of the uploaded row)
+          });
+        }
+        const sites = new Set(rows.map(r => upk(r.site))).size;
+        const eqps = new Set(rows.map(r => upk(r.eqp))).size;
+        return { rows, note: `Read ${fmtN(rows.length)} bin lines across ${fmtN(sites)} sites and ${fmtN(eqps)} equipment codes.` };
+      }
+
+      function kpis(view) {
+        const nq = (a, k) => new Set(a.map(r => upk(r[k])).filter(v => v !== '')).size;
+        return [
+          ['Opening Value', crore(sum(view, 'openVal')), 'value at period start', '#7c5cbf'],
+          ['Receipt Value', crore(sum(view, 'recvVal')), 'received (PO + DC)', '#1d9e75'],
+          ['Issue Value', crore(sum(view, 'issueVal')), 'issued (EQP + DC)', '#d8504c'],
+          ['Closing Value', crore(sum(view, 'closeVal')), 'total closing stock value', '#2f6db0'],
+          
+          ['Sites', fmtN(nq(view, 'site')), 'distinct site codes', '#0891b2'],
+          ['Equipment', fmtN(nq(view, 'eqp')), 'distinct EQP codes', '#e08a1e'],
+          ['Departments', fmtN(nq(view, 'dept')), 'distinct departments', '#2f6db0'],
+          ['Fleet Types', fmtN(nq(view, 'fleet')), 'distinct fleet descriptions', '#1d9e75'],
+          ['Item Classes', fmtN(nq(view, 'itemClass')), 'distinct item classes', '#7c5cbf'],
+          ['Bin Lines', fmtN(view.length), 'rows in current view', '#8a98a4']
+        ];
+      }
+
+      function charts(view) {
+        const opts = g => ({ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, ...g });
+        // case-insensitive group -> summed measure, first-seen display label
+        const grp = (k, v) => {
+          const map = new Map();
+          view.forEach(r => { const u = upk(r[k]) || '—'; let o = map.get(u); if (!o) { o = { disp: (String(r[k] || '').trim() || '—'), val: 0 }; map.set(u, o); } o.val += (+r[v] || 0); });
+          return [...map.values()];
+        };
+        const inrTick = { ticks: { callback: v => fmtN(v / 1e7, 2) + ' Cr' } };
+        return [
+          {
+            title: 'Department-wise inventory share', sub: '% of \u20b9 closing value', height: 300, legend: true, render(cv) {
+              const PIE = ['#2f6db0', '#1d9e75', '#e08a1e', '#7c5cbf', '#0891b2', '#d8504c', '#163a5c', '#4c9f70', '#c2708f', '#8a98a4'];
+              const e = grp('dept', 'closeVal').filter(x => x.val > 0).sort((a, b) => b.val - a.val);
+              const tot = e.reduce((s, x) => s + x.val, 0) || 1;
+              cv._legend = e.map((x, i) => `<span><i style="background:${PIE[i % PIE.length]}"></i>${x.disp} ${fmtPct(x.val / tot)}</span>`).join('');
+              return new Chart(cv, { type: 'pie', data: { labels: e.map(x => x.disp), datasets: [{ data: e.map(x => Math.round(x.val)), backgroundColor: e.map((x, i) => PIE[i % PIE.length]), borderWidth: 2, borderColor: '#fff' }] }, options: opts({ plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => c.label + ': ' + crore(c.parsed) + ' (' + fmtPct(c.parsed / tot) + ')' } } } }) });
+            }
+          },
+          {
+            title: 'Closing value by department', sub: '\u20b9 closing stock value', height: 300, render(cv) {
+              const e = grp('dept', 'closeVal').sort((a, b) => b.val - a.val);
+              return new Chart(cv, { type: 'bar', data: { labels: e.map(x => x.disp), datasets: [{ data: e.map(x => Math.round(x.val)), backgroundColor: '#2f6db0', borderRadius: 5 }] }, options: opts({ scales: { y: inrTick, x: { ticks: { maxRotation: 50, autoSkip: false, font: { size: 10 } } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => crore(c.parsed.y) } } } }) });
+            }
+          },
+          {
+            title: 'Value flow', sub: 'opening \u2192 receipt \u2192 issue \u2192 closing', height: 300, render(cv) {
+              const labs = ['Opening', 'Receipt', 'Issue', 'Closing'];
+              const vals = [sum(view, 'openVal'), sum(view, 'recvVal'), sum(view, 'issueVal'), sum(view, 'closeVal')].map(Math.round);
+              const cols = ['#7c5cbf', '#1d9e75', '#d8504c', '#2f6db0'];
+              return new Chart(cv, { type: 'bar', data: { labels: labs, datasets: [{ data: vals, backgroundColor: cols, borderRadius: 5 }] }, options: opts({ scales: { y: inrTick }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => crore(c.parsed.y) } } } }) });
+            }
+          },
+          {
+            title: 'Closing value by item class', sub: 'top 12 categories', height: 300, render(cv) {
+              const e = grp('itemClass', 'closeVal').sort((a, b) => b.val - a.val).slice(0, 12);
+              return new Chart(cv, { type: 'bar', data: { labels: e.map(x => x.disp), datasets: [{ data: e.map(x => Math.round(x.val)), backgroundColor: '#e08a1e', borderRadius: 5 }] }, options: opts({ scales: { y: inrTick, x: { ticks: { maxRotation: 55, autoSkip: false, font: { size: 9.5 } } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => crore(c.parsed.y) } } } }) });
+            }
+          },
+          {
+            title: 'Top 12 fleet descriptions', sub: '\u20b9 closing value', height: 340, render(cv) {
+              const e = grp('fleet', 'closeVal').sort((a, b) => b.val - a.val).slice(0, 12);
+              return new Chart(cv, { type: 'bar', data: { labels: e.map(x => x.disp), datasets: [{ data: e.map(x => Math.round(x.val)), backgroundColor: '#163a5c', borderRadius: 5 }] }, options: opts({ indexAxis: 'y', scales: { x: inrTick, y: { ticks: { font: { size: 10 } } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => crore(c.parsed.x) } } } }) });
+            }
+          },
+          {
+            title: 'Top 12 sites by closing value', sub: 'highest-value stores', height: 340, render(cv) {
+              const e = grp('site', 'closeVal').sort((a, b) => b.val - a.val).slice(0, 12);
+              return new Chart(cv, { type: 'bar', data: { labels: e.map(x => x.disp), datasets: [{ data: e.map(x => Math.round(x.val)), backgroundColor: '#0891b2', borderRadius: 5 }] }, options: opts({ indexAxis: 'y', scales: { x: inrTick, y: { ticks: { font: { size: 10 } } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => crore(c.parsed.x) } } } }) });
+            }
+          }
+        ];
+      }
+
+      const columns = [
+        { key: '_sr', label: 'Sr No', type: 'sr' },
+        { key: 'site', label: 'Site Code', type: 'text' }, { key: 'location', label: 'Location Code', type: 'text' },
+        { key: 'itemCode', label: 'Item Code', type: 'text' }, { key: 'itemDesc', label: 'Item Description', type: 'text' },
+        { key: 'itemClass', label: 'Item Class', type: 'text' }, { key: 'binCode', label: 'Bin Code', type: 'text' },
+        { key: 'binDesc', label: 'Bin Description', type: 'text' }, { key: 'eqp', label: 'EQP Code', type: 'text' },
+        { key: 'dept', label: 'Department', type: 'text' }, { key: 'fleet', label: 'Fleet Description', type: 'text' },
+        { key: 'openQty', label: 'Opening Qty', type: 'num2' }, { key: 'recvQty', label: 'Receipt Qty', type: 'num2' },
+        { key: 'issueQty', label: 'Issue Qty', type: 'num2' }, { key: 'closeQty', label: 'Closing Qty', type: 'num2' },
+        { key: 'rate', label: 'Unit Rate', type: 'num2' }, { key: 'openVal', label: 'Opening Value', type: 'num2' },
+        { key: 'recvVal', label: 'Receipt Value', type: 'num2' }, { key: 'issueVal', label: 'Issue Value', type: 'num2' },
+        { key: 'closeVal', label: 'Closing Value', type: 'num2' }
+      ];
+      const tableColumns = columns.map(c => ({ key: c.key, label: c.label, fmt: c.type === 'sr' ? 'sr' : c.type === 'num2' ? 'num2' : 'text' }));
+      const filters = [
+        { key: 'dept', label: 'Department', multi: true }, { key: 'fleet', label: 'Fleet Description', multi: true },
+        { key: 'itemClass', label: 'Item Class', multi: true }, { key: 'site', label: 'Site', multi: true },
+        { key: 'eqp', label: 'Equipment', multi: true }, { key: 'location', label: 'Location', multi: true }
+      ];
+
+      /* ---------------- Excel export: Master + rebuild R1, R2, R3 exactly ---------------- */
+      // Indian-grouping accounting format (0 -> "-", 2 dp, negatives with minus): e.g. 2,43,60,684.84
+      const ACC = '_ * #,##,##0.00_ ;_ * \\-#,##,##0.00_ ;_ * "-"??_ ;_ @_ ';
+      const NUM_IN = '#,##,##0.00';   // Indian grouping, plain (quantity columns on the Master tab)
+      async function exportExcel(fileName) {
+        const data = (typeof VIEW !== 'undefined' && Array.isArray(VIEW)) ? VIEW : RAW;
+        const wb = new ExcelJS.Workbook(); wb.creator = COMPANY.name; wb.created = new Date();
+        const HEAD = 'FF0E2A43', THIN = { style: 'thin', color: { argb: 'FFBFC8D4' } };
+        const bd = { top: THIN, left: THIN, bottom: THIN, right: THIN };
+        const ALT = 'FFF6F9FC', TOTBG = 'FFDCE6F4';
+
+        // first-seen display map + case-insensitive sorted unique keys
+        function dispMap(key) { const m = new Map(); data.forEach(r => { const u = upk(r[key]); if (!m.has(u)) m.set(u, String(r[key] || '').trim()); }); return m; }
+        const sortU = arr => arr.slice().sort((a, b) => a < b ? -1 : a > b ? 1 : 0); // keys already upper-cased
+
+        const headStyle = cell => { cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11, name: 'Calibri' }; cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEAD } }; cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }; cell.border = bd; };
+        const numCell = (cell, v, opt) => { if (v !== null && v !== undefined) { cell.value = v; cell.numFmt = ACC; } cell.border = bd; cell.font = { size: 10.5, name: 'Calibri', bold: !!(opt && opt.bold) }; cell.alignment = { horizontal: 'right' }; if (opt && opt.fill) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: opt.fill } }; };
+        const txtCell = (cell, v, opt) => { cell.value = v; cell.border = bd; cell.font = { size: 10.5, name: 'Calibri', bold: !!(opt && opt.bold) }; cell.alignment = { horizontal: 'left' }; if (opt && opt.fill) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: opt.fill } }; };
+
+        /* ===================== Master (exact echo of the uploaded ERP sheet) ===================== */
+        // Placed FIRST so the workbook order is Master -> R1 -> R2 -> R3. Columns follow the
+        // uploaded file's original order & header text; values are written verbatim (numbers as
+        // numbers) so the tab matches the source exactly. Financial columns use the Indian format.
+        const mcols = (MASTER_COLS && MASTER_COLS.length) ? MASTER_COLS
+          : columns.filter(c => c.type !== 'sr').map(c => ({ key: c.key, header: c.label, num: c.type === 'num2', money: c.type === 'num2' }));
+        const wsM = wb.addWorksheet('Master', { views: [{ state: 'frozen', ySplit: 1 }] });
+        mcols.forEach((c, i) => { const cell = wsM.getRow(1).getCell(i + 1); cell.value = c.header; headStyle(cell); });
+        data.forEach((r, ri) => {
+          const row = wsM.getRow(ri + 2);
+          const rm = (r._m && r._m.length === mcols.length) ? r._m : null;
+          for (let i = 0; i < mcols.length; i++) {
+            const c = mcols[i], v = rm ? rm[i] : r[c.key], cell = row.getCell(i + 1);
+            if (c.num) cell.value = (v === '' || v == null) ? null : +v;
+            else cell.value = (v == null ? '' : v);
+          }
+        });
+        mcols.forEach((c, i) => {
+          const col = wsM.getColumn(i + 1);
+          col.width = c.num ? 16 : Math.min(Math.max(String(c.header).length + 2, 12), 42);
+          if (c.money) col.numFmt = ACC; else if (c.num) col.numFmt = NUM_IN;
+        });
+        wsM.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: mcols.length } };
+
+        /* ========================= R1 ========================= */
+        const ws1 = wb.addWorksheet('R1', { views: [{ showGridLines: false }] });
+        // GLOBAL first-seen casing per field (matches Excel's pivot item cache); used on every sheet.
+        const deptDisp = dispMap('dept'), fleetDisp = dispMap('fleet'), classDisp = dispMap('itemClass'),
+          eqpDisp = dispMap('eqp'), siteDisp = dispMap('site'), locDisp = dispMap('location');
+        // aggregates
+        const dAgg = new Map(), fAgg = new Map(), dClass = new Map(), classSet = new Set();
+        data.forEach(r => {
+          const du = upk(r.dept), fu = upk(r.fleet), cu = upk(r.itemClass); classSet.add(cu);
+          let d = dAgg.get(du); if (!d) { d = { o: 0, rc: 0, is: 0, cl: 0 }; dAgg.set(du, d); }
+          d.o += r.openVal; d.rc += r.recvVal; d.is += r.issueVal; d.cl += r.closeVal;
+          let f = fAgg.get(fu); if (!f) { f = { o: 0, rc: 0, is: 0, cl: 0 }; fAgg.set(fu, f); }
+          f.o += r.openVal; f.rc += r.recvVal; f.is += r.issueVal; f.cl += r.closeVal;
+          let dc = dClass.get(du); if (!dc) { dc = new Map(); dClass.set(du, dc); }
+          let cell = dc.get(cu); if (!cell) { cell = { sum: 0, n: 0 }; dc.set(cu, cell); } cell.sum += r.closeVal; cell.n++;
+        });
+        const depsU = sortU([...dAgg.keys()]), fleetsU = sortU([...fAgg.keys()]), classesU = sortU([...classSet]);
+
+        // -- Block 1: by Department (Opening/Receipt/Issue/Closing) at row 3 --
+        let R = 3;
+        const h1 = ['Row Labels', ' Opening value.', 'Receipt Value (PO+DC).', 'Issue Value (EQP+DC).', 'Closing Value.'];
+        h1.forEach((t, i) => { const c = ws1.getRow(R).getCell(i + 1); c.value = t; headStyle(c); });
+        R++;
+        let t1 = { o: 0, rc: 0, is: 0, cl: 0 };
+        depsU.forEach((u, idx) => {
+          const a = dAgg.get(u), row = ws1.getRow(R); const fill = idx % 2 ? ALT : null;
+          txtCell(row.getCell(1), deptDisp.get(u), { fill }); numCell(row.getCell(2), a.o, { fill }); numCell(row.getCell(3), a.rc, { fill }); numCell(row.getCell(4), a.is, { fill }); numCell(row.getCell(5), a.cl, { fill });
+          t1.o += a.o; t1.rc += a.rc; t1.is += a.is; t1.cl += a.cl; R++;
+        });
+        { const row = ws1.getRow(R); txtCell(row.getCell(1), 'Grand Total', { bold: true, fill: TOTBG }); numCell(row.getCell(2), t1.o, { bold: true, fill: TOTBG }); numCell(row.getCell(3), t1.rc, { bold: true, fill: TOTBG }); numCell(row.getCell(4), t1.is, { bold: true, fill: TOTBG }); numCell(row.getCell(5), t1.cl, { bold: true, fill: TOTBG }); R++; }
+
+        // -- Block 2: Department x Item Class (Closing) cross-tab, 6 blank rows gap --
+        R += 6;
+        { const row = ws1.getRow(R); txtCell(row.getCell(1), 'Sum of Closing Value', { bold: true }); txtCell(row.getCell(2), 'Column Labels', { bold: true }); R++; }
+        // header
+        { const row = ws1.getRow(R); const c1 = row.getCell(1); c1.value = 'Row Labels'; headStyle(c1); classesU.forEach((cu, j) => { const c = row.getCell(2 + j); c.value = classDisp.get(cu); headStyle(c); }); const gt = row.getCell(2 + classesU.length); gt.value = 'Grand Total'; headStyle(gt); R++; }
+        const colTot = new Array(classesU.length).fill(0); let grand2 = 0;
+        depsU.forEach((u, idx) => {
+          const row = ws1.getRow(R); const fill = idx % 2 ? ALT : null; const dc = dClass.get(u) || new Map(); let rowTot = 0;
+          txtCell(row.getCell(1), deptDisp.get(u), { fill });
+          classesU.forEach((cu, j) => { const cell = dc.get(cu); if (cell) { numCell(row.getCell(2 + j), cell.sum, { fill }); rowTot += cell.sum; colTot[j] += cell.sum; } else { numCell(row.getCell(2 + j), null, { fill }); } });
+          numCell(row.getCell(2 + classesU.length), rowTot, { fill }); grand2 += rowTot; R++;
+        });
+        { const row = ws1.getRow(R); txtCell(row.getCell(1), 'Grand Total', { bold: true, fill: TOTBG }); classesU.forEach((cu, j) => numCell(row.getCell(2 + j), colTot[j], { bold: true, fill: TOTBG })); numCell(row.getCell(2 + classesU.length), grand2, { bold: true, fill: TOTBG }); R++; }
+
+        // -- Block 3: by Fleet Description (Opening/Receipt/Issue/Closing), 5 blank rows gap --
+        R += 5;
+        const h3 = ['Row Labels', 'Sum of Opening value', 'Sum of Receipt Value (PO+DC)', 'Sum of Issue Value (EQP+DC)', 'Sum of Closing Value'];
+        h3.forEach((t, i) => { const c = ws1.getRow(R).getCell(i + 1); c.value = t; headStyle(c); }); R++;
+        let t3 = { o: 0, rc: 0, is: 0, cl: 0 };
+        fleetsU.forEach((u, idx) => {
+          const a = fAgg.get(u), row = ws1.getRow(R); const fill = idx % 2 ? ALT : null;
+          txtCell(row.getCell(1), fleetDisp.get(u), { fill }); numCell(row.getCell(2), a.o, { fill }); numCell(row.getCell(3), a.rc, { fill }); numCell(row.getCell(4), a.is, { fill }); numCell(row.getCell(5), a.cl, { fill });
+          t3.o += a.o; t3.rc += a.rc; t3.is += a.is; t3.cl += a.cl; R++;
+        });
+        { const row = ws1.getRow(R); txtCell(row.getCell(1), 'Grand Total', { bold: true, fill: TOTBG }); numCell(row.getCell(2), t3.o, { bold: true, fill: TOTBG }); numCell(row.getCell(3), t3.rc, { bold: true, fill: TOTBG }); numCell(row.getCell(4), t3.is, { bold: true, fill: TOTBG }); numCell(row.getCell(5), t3.cl, { bold: true, fill: TOTBG }); }
+        ws1.getColumn(1).width = 30; for (let c = 2; c <= Math.max(5, classesU.length + 2); c++) ws1.getColumn(c).width = 18;
+
+        /* ========================= R2 ========================= */
+        const ws2 = wb.addWorksheet('R2', { views: [{ state: 'frozen', ySplit: 3 }] });
+        const eqpMap = new Map();
+        data.forEach(r => {
+          const key = upk(r.eqp) + '\u00A6' + upk(r.dept) + '\u00A6' + upk(r.fleet);
+          const ka = upk(r.eqp), kb = upk(r.dept), kc = upk(r.fleet);
+          let g = eqpMap.get(key); if (!g) { g = { a: eqpDisp.get(ka), b: deptDisp.get(kb), c: fleetDisp.get(kc), ka: ka, kb: kb, kc: kc, cl: 0 }; eqpMap.set(key, g); } g.cl += r.closeVal;
+        });
+        const eqpRows = [...eqpMap.values()].sort((x, y) => x.ka < y.ka ? -1 : x.ka > y.ka ? 1 : x.kb < y.kb ? -1 : x.kb > y.kb ? 1 : x.kc < y.kc ? -1 : x.kc > y.kc ? 1 : 0);
+        ['EQP CODE', 'Department', 'Fleet Description', 'Sum of Closing Value'].forEach((t, i) => { const c = ws2.getRow(3).getCell(i + 1); c.value = t; headStyle(c); });
+        let r2 = 4, g2 = 0;
+        eqpRows.forEach((g, idx) => { const row = ws2.getRow(r2); const fill = idx % 2 ? ALT : null; txtCell(row.getCell(1), g.a, { fill }); txtCell(row.getCell(2), g.b, { fill }); txtCell(row.getCell(3), g.c, { fill }); numCell(row.getCell(4), g.cl, { fill }); g2 += g.cl; r2++; });
+        { const row = ws2.getRow(r2); txtCell(row.getCell(1), 'Grand Total', { bold: true, fill: TOTBG }); txtCell(row.getCell(2), '', { bold: true, fill: TOTBG }); txtCell(row.getCell(3), '', { bold: true, fill: TOTBG }); numCell(row.getCell(4), g2, { bold: true, fill: TOTBG }); }
+        ws2.getColumn(1).width = 20; ws2.getColumn(2).width = 26; ws2.getColumn(3).width = 24; ws2.getColumn(4).width = 20;
+
+        /* ========================= R3 ========================= */
+        const ws3 = wb.addWorksheet('R3', { views: [{ state: 'frozen', xSplit: 2, ySplit: 4 }] });
+        const slMap = new Map();
+        data.forEach(r => {
+          const key = upk(r.site) + '\u00A6' + upk(r.location);
+          const ks = upk(r.site), kl = upk(r.location);
+          let g = slMap.get(key); if (!g) { g = { site: siteDisp.get(ks), loc: locDisp.get(kl), ks: ks, kl: kl, by: new Map(), tot: 0 }; slMap.set(key, g); }
+          const du = upk(r.dept); let cell = g.by.get(du); if (!cell) { cell = { sum: 0, n: 0 }; g.by.set(du, cell); } cell.sum += r.closeVal; cell.n++; g.tot += r.closeVal;
+        });
+        const slRows = [...slMap.values()].sort((x, y) => x.ks < y.ks ? -1 : x.ks > y.ks ? 1 : x.kl < y.kl ? -1 : x.kl > y.kl ? 1 : 0);
+        // title + header
+        { const row = ws3.getRow(3); txtCell(row.getCell(1), 'Sum of Closing Value', { bold: true }); txtCell(row.getCell(3), 'Department', { bold: true }); }
+        { const row = ws3.getRow(4); const a = row.getCell(1); a.value = 'Site Code'; headStyle(a); const b = row.getCell(2); b.value = 'Location Code'; headStyle(b); depsU.forEach((u, j) => { const c = row.getCell(3 + j); c.value = deptDisp.get(u); headStyle(c); }); const gt = row.getCell(3 + depsU.length); gt.value = 'Grand Total'; headStyle(gt); }
+        let r3 = 5; const colT3 = new Array(depsU.length).fill(0); let grand3 = 0;
+        slRows.forEach((g, idx) => {
+          const row = ws3.getRow(r3); const fill = idx % 2 ? ALT : null;
+          txtCell(row.getCell(1), g.site, { fill }); txtCell(row.getCell(2), g.loc, { fill });
+          depsU.forEach((u, j) => { const cell = g.by.get(u); if (cell) { numCell(row.getCell(3 + j), cell.sum, { fill }); colT3[j] += cell.sum; } else { numCell(row.getCell(3 + j), null, { fill }); } });
+          numCell(row.getCell(3 + depsU.length), g.tot, { fill }); grand3 += g.tot; r3++;
+        });
+        { const row = ws3.getRow(r3); txtCell(row.getCell(1), 'Grand Total', { bold: true, fill: TOTBG }); txtCell(row.getCell(2), '', { bold: true, fill: TOTBG }); depsU.forEach((u, j) => numCell(row.getCell(3 + j), colT3[j], { bold: true, fill: TOTBG })); numCell(row.getCell(3 + depsU.length), grand3, { bold: true, fill: TOTBG }); }
+        ws3.getColumn(1).width = 12; ws3.getColumn(2).width = 26; for (let c = 3; c <= depsU.length + 3; c++) ws3.getColumn(c).width = 16;
+
+        const buf = await wb.xlsx.writeBuffer();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+        a.download = fileName; a.click();
+      }
+
+      return {
+        meta: {
+          name: 'Bin / Equipment Values',
+          tagline: 'Bin-wise stock value \u2014 opening / receipt / issue / closing by department, fleet, equipment & site',
+          icon: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-6 9 6v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>'
+        },
+        hint: 'Upload the ERP <b>Master Sheet</b> (Site Code, Location Code, Item Code, ITEM CLASS, Bin Code, EQP CODE, Department, Fleet Description and the Opening/Receipt/Issue/Closing value columns). Filter by department / fleet / item class / site / equipment and search across item, bin or equipment. The Excel export rebuilds <b>R1</b> (department, item-class &amp; fleet pivots), <b>R2</b> (by equipment) and <b>R3</b> (site \u00d7 department) exactly as the reference workbook.',
+        sheetName: 'Bin Equipment Values', exportName: 'VisionInfra-Bin-Equipment-Values',
+        process, kpis, charts, columns, tableColumns, filters, cascadeFilters: true,
+        searchKeys: ['site', 'location', 'itemCode', 'itemDesc', 'binCode', 'binDesc', 'eqp', 'dept', 'fleet', 'itemClass'],
+        exportExcel
+      };
+    })();
+
     /* ===================== APP SHELL ===================== */
     let CURRENT = null, PROC = null, RAW = [], VIEW = [], sortKey = null, sortDir = -1, chartObjs = [], msState = {}, calState = {}, tableLimit = 200;
 
@@ -6572,6 +6908,42 @@
       return opts;
     }
     const debounce=(fn,ms=180)=>{let t;return function(){clearTimeout(t);t=setTimeout(fn,ms);};};
+    /* ---- Cascading (dependent) multi-select filters ----
+       Opt-in per report via PROC.cascadeFilters. The available options in each
+       multi-select are narrowed to values that co-occur (in RAW) with the current
+       selections of the OTHER multi-selects — e.g. picking Department = PAVER limits
+       the Fleet Description list to fleets seen under PAVER. Already-checked values
+       stay visible so they can be unchecked. Reports without the flag are unaffected. */
+    function msAvailForFilter(f) {
+      if (!PROC || !PROC.cascadeFilters) return null;
+      const multi = (PROC.filters || []).filter(x => x.multi);
+      const others = multi.filter(x => x.key !== f.key && msState[x.key] && msState[x.key].size);
+      if (!others.length) return null;                  // nothing constrains this filter → all options
+      const avail = new Set();
+      for (const r of RAW) { let ok = true; for (const x of others) { if (!x.__set.has(String(r[x.key]))) { ok = false; break; } } if (ok) avail.add(String(r[f.key])); }
+      return avail;
+    }
+    function applyMsVisibility(ms) {
+      const si = ms.querySelector('.ms-search'); const q = si ? norm(si.value) : '';
+      const avail = ms._avail || null;
+      ms.querySelectorAll('.msrow').forEach(row => {
+        const cb = row.querySelector('input'); const val = cb ? cb.value : '';
+        const okText = !q || norm(row.textContent).includes(q);
+        const okAvail = !avail || avail.has(val) || (cb && cb.checked);
+        row.style.display = (okText && okAvail) ? '' : 'none';
+      });
+    }
+    function updateCascade() {
+      if (!PROC || !PROC.cascadeFilters) return;
+      const host = document.getElementById('filters'); if (!host) return;
+      const multi = (PROC.filters || []).filter(x => x.multi);
+      multi.forEach(x => { x.__set = msState[x.key] || new Set(); });   // cache for the inner loop
+      multi.forEach(f => {
+        const ms = host.querySelector('.ms[data-fk="' + f.key + '"]'); if (!ms) return;
+        ms._avail = msAvailForFilter(f);
+        applyMsVisibility(ms);
+      });
+    }
     function buildFilters() {
       const host = document.getElementById('filters'); const fs = PROC.filters || [];
       calState = {};
@@ -6612,8 +6984,7 @@
       const _cf = document.getElementById('btnClearFilters'); if (_cf) _cf.onclick = resetAllFilters;
       host.querySelectorAll('input[data-rg],input[data-dr]').forEach(inp => inp.oninput = applyFilters);
       host.querySelectorAll('.ms-search').forEach(si => si.oninput = e => {
-        e.stopPropagation(); const q = norm(si.value);
-        si.parentElement.querySelectorAll('.msrow').forEach(row => { row.style.display = norm(row.textContent).includes(q) ? '' : 'none'; });
+        e.stopPropagation(); const ms = si.closest('.ms'); if (ms) applyMsVisibility(ms);
       });
       host.querySelectorAll('.ms-search').forEach(si => si.onclick = e => e.stopPropagation());
       const se = document.getElementById('fSearch'); if (se) se.oninput = debounce(applyFilters, 180);
@@ -6737,6 +7108,7 @@
         if (q && PROC.searchKeys) { if (!norm(PROC.searchKeys.map(k => r[k]).join(' ')).includes(q)) return false; }
         return true;
       });
+      updateCascade();
       render();
     }
     function render() { renderModHead(); renderKpis(); renderCharts(); renderTable(); const rc = document.getElementById('rowCount'); if (rc) rc.textContent = `${fmtN(VIEW.length)} of ${fmtN(RAW.length)} rows`; }
