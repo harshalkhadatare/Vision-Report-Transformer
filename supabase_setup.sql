@@ -1434,8 +1434,13 @@ create or replace function public.otp_issue_svc(p_secret text, p_email text)
 returns json language plpgsql security definer set search_path = public, extensions as $$
 declare v_secret text; v record; v_code text; v_b bytea; v_recent int; v_last timestamptz; v_id uuid;
 begin
+  -- The real access control is the GRANT: this function is revoked from public,
+  -- anon and authenticated, so only the service role (the serverless mailer) can
+  -- call it at all. The shared secret is a second layer, and it is only enforced
+  -- when app_config actually holds one — otherwise a seeding mismatch would
+  -- silently stop every reset email with no visible reason.
   select value into v_secret from public.app_config where key = 'mail_secret';
-  if v_secret is null or p_secret is distinct from v_secret then
+  if v_secret is not null and v_secret <> '' and p_secret is distinct from v_secret then
     return json_build_object('ok',false,'error','Not authorised.');
   end if;
 

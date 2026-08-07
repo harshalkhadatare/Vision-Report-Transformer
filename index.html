@@ -4244,10 +4244,16 @@
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email: em })
         });
-        const d = await r.json().catch(() => ({}));
+        let d = null; try { d = await r.json(); } catch (e) { d = null; }
         FP_EMAIL = em;
-        if (d && d.ok === false && d.error) { authMsg(d.error, 'err'); }
-        else {
+        // A 404 (function not deployed) or an HTML error page used to look exactly
+        // like success, which made "no mail arrived" impossible to diagnose.
+        if (!r.ok || !d) {
+          authMsg('Could not reach the OTP service (HTTP ' + r.status + '). '
+            + 'The latest version may not be deployed yet \u2014 please contact IT Support.', 'err');
+        } else if (d.ok === false) {
+          authMsg(d.error || 'The code could not be sent. Please contact IT Support.', 'err');
+        } else {
           fpShow(2); fpStartTimers();
           document.getElementById('fpOtp').value = '';
           document.getElementById('fpVerifyBtn').disabled = true;

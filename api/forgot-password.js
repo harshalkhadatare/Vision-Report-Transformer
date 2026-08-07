@@ -72,8 +72,16 @@ module.exports = async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ ok: false, error: 'POST only.' }); return; }
 
   const { SUPABASE_URL, SUPABASE_SERVICE_KEY, MAIL_SECRET, PORTAL_URL, MAIL_FROM } = process.env;
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY || !MAIL_SECRET) {
-    res.status(500).json({ ok: false, error: 'Mail service is not configured. Please contact IT Support.' });
+  const missing = ['SUPABASE_URL', 'SUPABASE_SERVICE_KEY', 'MAIL_SECRET'].filter(k => !process.env[k]);
+  const noTransport = !(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) && !process.env.RESEND_API_KEY;
+  if (missing.length || noTransport) {
+    const why = missing.length ? ('missing ' + missing.join(', '))
+      : 'no mail transport (set GMAIL_USER + GMAIL_APP_PASSWORD, or RESEND_API_KEY)';
+    console.error('OTP: not configured -', why);
+    res.status(200).json({
+      ok: false, code: 'OTP_NOT_CONFIGURED',
+      error: 'The reset service is not configured on the server (' + why + '). Please contact IT Support.'
+    });
     return;
   }
 
@@ -98,8 +106,34 @@ module.exports = async (req, res) => {
     const raw = await r.text();
     let out = null; try { out = JSON.parse(raw); } catch (e) { out = null; }
 
-    // Unknown address, not approved, or throttled → identical generic reply.
-    if (!out || out.ok !== true || out.send !== true) { res.status(200).json(GENERIC); return; }
+    // ---- Infrastructure problems are reported, NOT hidden ----------------
+    // Only "does this account exist" has to stay generic. A missing RPC, a bad
+    // key or a dead SMTP connection are setup faults: masking them as success
+    // is what makes "the mail never arrives" impossible to diagnose.
+    if (!r.ok || !out) {
+      const detail = (out && (out.message || out.hint)) || raw.slice(0, 300);
+      console.error('OTP: otp_issue_svc HTTP', r.status, detail);
+      const missingFn = r.status === 404 || /PGRST202|could not find the function|does not exist/i.test(detail || '');
+      res.status(200).json({
+        ok: false,
+        code: missingFn ? 'OTP_RPC_MISSING' : 'OTP_RPC_ERROR',
+        error: missingFn
+          ? 'Password reset is not set up on the database yet. Please ask IT to re-run supabase_setup.sql.'
+          : 'The reset service could not reach the database. Please contact IT Support.'
+      });
+      return;
+    }
+    if (out.ok === false) {
+      console.error('OTP: otp_issue_svc refused -', out.error || '(no reason)');
+      res.status(200).json({
+        ok: false, code: 'OTP_NOT_AUTHORISED',
+        error: 'The reset service is not authorised (mail secret mismatch). Please contact IT Support.'
+      });
+      return;
+    }
+
+    // Genuinely unknown / unapproved address, or throttled: stay generic.
+    if (out.send !== true) { res.status(200).json(GENERIC); return; }
 
     const portal = PORTAL_URL || 'https://vision-report-transformer.vercel.app';
     const built = TPL.passwordOtp({
@@ -117,7 +151,12 @@ module.exports = async (req, res) => {
 
     if (!sent.ok) {
       console.error('OTP send failed for', mask(out.email), '-', sent.error);   // never logs the code
-      res.status(200).json({ ok: false, error: 'We could not send the email just now. Please try again in a moment.' });
+      // The address is already known-good at this point, so naming the transport
+      // fault does not leak anything and it is the only way to debug delivery.
+      res.status(200).json({
+        ok: false, code: 'OTP_SMTP_FAILED',
+        error: 'The code could not be emailed: ' + String(sent.error || 'mail transport error').slice(0, 160)
+      });
       return;
     }
     res.status(200).json(GENERIC);
