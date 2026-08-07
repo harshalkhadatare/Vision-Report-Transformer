@@ -218,9 +218,14 @@ begin
   select * into v from public.app_users where session_token=p_token;
   if v.id is null or v.status<>'approved' then return json_build_object('ok',false,'error','Not signed in.'); end if;
   select coalesce(json_agg(t order by t.uploaded_at desc),'[]') into v_rows from (
-    select id,report_type,file_name,file_size,row_count,uploaded_by,uploaded_by_id,storage_path,status,uploaded_at
-    from public.uploads
-      where (p_report_type is null or report_type=p_report_type) limit 200
+    select u.id,u.report_type,u.file_name,u.file_size,u.row_count,u.uploaded_by,u.uploaded_by_id,
+           u.storage_path,u.status,u.uploaded_at,
+           -- role of the uploader, so the UI can show the latest ADMIN-published file
+           coalesce(au.role,'user') as uploaded_by_role
+    from public.uploads u
+    left join public.app_users au on au.user_id = u.uploaded_by_id
+      where (p_report_type is null or u.report_type=p_report_type)
+      order by u.uploaded_at desc limit 200
   ) t;
   return json_build_object('ok',true,'rows',v_rows);
 end; $$;
