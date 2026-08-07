@@ -1454,6 +1454,169 @@
       text-decoration: underline
     }
 
+    /* ---------- forgot password ---------- */
+    .fp-row {
+      margin-top: 12px
+    }
+
+    .fp-link {
+      background: none;
+      border: none;
+      color: #fff;
+      font-weight: 700;
+      cursor: pointer;
+      font-size: 13px;
+      text-decoration: underline;
+      padding: 4px 2px
+    }
+
+    .fp-link[disabled] {
+      opacity: .5;
+      cursor: default;
+      text-decoration: none
+    }
+
+    .fp-alt {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 12px;
+      flex-wrap: wrap
+    }
+
+    .fp-alt .fp-link {
+      margin-left: auto
+    }
+
+    .fp-timer {
+      font-size: 12.5px;
+      color: rgba(255, 255, 255, .82);
+      font-weight: 600
+    }
+
+    .otp-in {
+      letter-spacing: 9px;
+      font-size: 20px !important;
+      font-weight: 700;
+      text-align: center
+    }
+
+    .pw-wrap {
+      position: relative
+    }
+
+    .pw-wrap input {
+      padding-right: 44px !important;
+      width: 100%
+    }
+
+    .pw-eye {
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 15px;
+      opacity: .62;
+      padding: 6px;
+      line-height: 1
+    }
+
+    .pw-eye:hover {
+      opacity: 1
+    }
+
+    .pw-rules {
+      list-style: none;
+      margin: 9px 0 0;
+      padding: 0;
+      display: grid;
+      gap: 4px
+    }
+
+    .pw-rules li {
+      font-size: 12px;
+      color: rgba(255, 255, 255, .72);
+      padding-left: 20px;
+      position: relative;
+      line-height: 1.5
+    }
+
+    .pw-rules li::before {
+      content: "\25CB";
+      position: absolute;
+      left: 2px;
+      top: 0;
+      font-size: 11px
+    }
+
+    .pw-rules li.ok {
+      color: #8ff0c4
+    }
+
+    .pw-rules li.ok::before {
+      content: "\2713";
+      font-weight: 700
+    }
+
+    .fp-done {
+      text-align: center;
+      padding: 8px 0 4px
+    }
+
+    .fp-tick svg {
+      width: 74px;
+      height: 74px
+    }
+
+    .fp-tick .fp-c {
+      fill: none;
+      stroke: #8ff0c4;
+      stroke-width: 3;
+      stroke-dasharray: 151;
+      stroke-dashoffset: 151;
+      animation: fpCirc .5s ease forwards
+    }
+
+    .fp-tick .fp-k {
+      fill: none;
+      stroke: #8ff0c4;
+      stroke-width: 4;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-dasharray: 40;
+      stroke-dashoffset: 40;
+      animation: fpCheck .35s .45s ease forwards
+    }
+
+    @keyframes fpCirc {
+      to {
+        stroke-dashoffset: 0
+      }
+    }
+
+    @keyframes fpCheck {
+      to {
+        stroke-dashoffset: 0
+      }
+    }
+
+    .fp-done-t {
+      font-weight: 800;
+      font-size: 17px;
+      color: #fff;
+      margin-top: 10px
+    }
+
+    .fp-done-s {
+      font-size: 13px;
+      color: rgba(255, 255, 255, .82);
+      margin-top: 5px
+    }
+
     .auth-msg {
       font-size: 12.5px;
       border-radius: 10px;
@@ -2009,7 +2172,78 @@
         <div class="auth-field"><label>Password</label><input id="liPass" type="password"
             autocomplete="current-password" placeholder="••••••••"></div>
         <button class="auth-btn" id="liBtn">Login</button>
+        <div class="auth-switch fp-row"><button id="toForgot" class="fp-link">Forgot Password?</button></div>
         <div class="auth-switch">No account yet? <button id="toRegister">Create one</button></div>
+      </div>
+
+      <!-- ============ Forgot password: email -> OTP -> new password ============ -->
+      <div id="forgotForm" style="display:none">
+        <!-- step 1: email -->
+        <div id="fpStep1">
+          <div class="auth-field"><label>Registered email address</label>
+            <input id="fpEmail" type="email" autocomplete="email" inputmode="email"
+              placeholder="e.g. yourname@visioninfraindia.com">
+            <div class="pwhint">We will email a 6-digit verification code, valid for 15 minutes.</div>
+          </div>
+          <button class="auth-btn" id="fpSendBtn">Send OTP</button>
+          <div class="fp-alt">
+            <button class="fp-link" id="fpHaveOtp">Already have a code? Verify OTP &rarr;</button>
+          </div>
+          <div class="auth-switch"><button id="fpBack1" class="fp-link">&larr; Back to login</button></div>
+        </div>
+
+        <!-- step 2: OTP -->
+        <div id="fpStep2" style="display:none">
+          <div class="auth-field"><label>Verification code</label>
+            <input id="fpOtp" class="otp-in" inputmode="numeric" autocomplete="one-time-code"
+              maxlength="6" placeholder="******">
+            <div class="pwhint" id="fpOtpHint">Enter the 6-digit code sent to your email.</div>
+          </div>
+          <button class="auth-btn" id="fpVerifyBtn" disabled>Verify OTP</button>
+          <div class="fp-alt">
+            <span id="fpTimer" class="fp-timer"></span>
+            <button class="fp-link" id="fpResend" disabled>Resend OTP</button>
+          </div>
+          <div class="auth-switch"><button id="fpBack2" class="fp-link">&larr; Back to login</button></div>
+        </div>
+
+        <!-- step 3: new password -->
+        <div id="fpStep3" style="display:none">
+          <div class="auth-field"><label>New password</label>
+            <div class="pw-wrap">
+              <input id="fpNew" type="password" autocomplete="new-password" placeholder="Create a strong password"
+                oninput="fpCheckPw()">
+              <button type="button" class="pw-eye" data-for="fpNew" aria-label="Show password">&#128065;</button>
+            </div>
+            <ul class="pw-rules" id="fpRules">
+              <li data-r="len">Minimum 8 characters</li>
+              <li data-r="upper">At least one uppercase letter</li>
+              <li data-r="lower">At least one lowercase letter</li>
+              <li data-r="num">At least one number</li>
+              <li data-r="spec">At least one special character</li>
+            </ul>
+          </div>
+          <div class="auth-field"><label>Confirm new password</label>
+            <div class="pw-wrap">
+              <input id="fpNew2" type="password" autocomplete="new-password" placeholder="Re-enter the password"
+                oninput="fpCheckPw()">
+              <button type="button" class="pw-eye" data-for="fpNew2" aria-label="Show password">&#128065;</button>
+            </div>
+            <div class="pwhint" id="fpMatch"></div>
+          </div>
+          <button class="auth-btn" id="fpSaveBtn" disabled>Reset password</button>
+          <div class="auth-switch"><button id="fpBack3" class="fp-link">&larr; Back to login</button></div>
+        </div>
+
+        <!-- step 4: success -->
+        <div id="fpStep4" style="display:none">
+          <div class="fp-done">
+            <div class="fp-tick"><svg viewBox="0 0 52 52"><circle class="fp-c" cx="26" cy="26" r="23"/><path class="fp-k" d="M15 27l8 8 15-16"/></svg></div>
+            <div class="fp-done-t">Password reset successfully</div>
+            <div class="fp-done-s">You can now sign in with your new password.</div>
+          </div>
+          <button class="auth-btn" id="fpGoLogin">Back to Login</button>
+        </div>
       </div>
       <div id="registerForm" style="display:none">
         <div class="auth-field"><label>Full Name</label><input id="rgName" placeholder="e.g. Harshal Khadatare"></div>
@@ -3933,6 +4167,160 @@
       document.getElementById('authTitle').textContent = toReg ? 'Create Account' : 'Login';
       document.getElementById('authSub').textContent = toReg ? 'Register a new account' : 'Sign in to access the Report Analyzer'; authMsg('');
     }
+    /* ================= Forgot password (email OTP) =================
+       Uses the app's existing auth + mail stack: the code is minted and checked
+       by Supabase RPCs, the mail goes out through /api/forgot-password which
+       talks straight to SMTP so the OTP is not delayed behind the once-a-minute
+       outbox cron. Login, registration and every other flow are untouched. */
+    let FP_TOKEN = null, FP_EMAIL = '', FP_BUSY = false, FP_CD = null, FP_EXP = null;
+
+    function fpShow(step) {
+      for (let i = 1; i <= 4; i++) {
+        const el = document.getElementById('fpStep' + i);
+        if (el) el.style.display = (i === step) ? 'block' : 'none';
+      }
+      const t = document.getElementById('authTitle'), sub = document.getElementById('authSub');
+      const titles = { 1: 'Forgot Password', 2: 'OTP Verification', 3: 'Create New Password', 4: 'Password Reset' };
+      const subs = {
+        1: 'Enter your registered email to receive a code',
+        2: 'Enter the 6-digit code we emailed you',
+        3: 'Choose a new password for your account',
+        4: 'All done'
+      };
+      if (t) t.textContent = titles[step]; if (sub) sub.textContent = subs[step];
+      authMsg('');
+    }
+    function swapForgot(on) {
+      document.getElementById('loginForm').style.display = on ? 'none' : 'block';
+      document.getElementById('registerForm').style.display = 'none';
+      document.getElementById('forgotForm').style.display = on ? 'block' : 'none';
+      if (on) { fpShow(1); }
+      else {
+        fpStopTimers(); FP_TOKEN = null;
+        document.getElementById('authTitle').textContent = 'Login';
+        document.getElementById('authSub').textContent = 'Sign in to access the Report Analyzer';
+        authMsg('');
+      }
+    }
+    function fpStopTimers() {
+      if (FP_CD) { clearInterval(FP_CD); FP_CD = null; }
+      if (FP_EXP) { clearInterval(FP_EXP); FP_EXP = null; }
+    }
+    // 30s resend cooldown + 15-minute validity countdown
+    function fpStartTimers() {
+      fpStopTimers();
+      const btn = document.getElementById('fpResend'), lbl = document.getElementById('fpTimer');
+      let left = 30; btn.disabled = true; btn.textContent = 'Resend OTP in ' + left + 's';
+      FP_CD = setInterval(() => {
+        left--;
+        if (left <= 0) { clearInterval(FP_CD); FP_CD = null; btn.disabled = false; btn.textContent = 'Resend OTP'; }
+        else btn.textContent = 'Resend OTP in ' + left + 's';
+      }, 1000);
+      let secs = 15 * 60;
+      const tick = () => {
+        secs--;
+        if (secs <= 0) {
+          clearInterval(FP_EXP); FP_EXP = null;
+          lbl.textContent = 'Code expired';
+          authMsg('This code has expired. Please request a new one.', 'err');
+          return;
+        }
+        const m = Math.floor(secs / 60), ss = String(secs % 60).padStart(2, '0');
+        lbl.textContent = 'Code valid for ' + m + ':' + ss;
+      };
+      lbl.textContent = 'Code valid for 15:00'; FP_EXP = setInterval(tick, 1000);
+    }
+    async function fpSendOtp(isResend) {
+      if (FP_BUSY) return;                                  // no double submits
+      const em = String(document.getElementById('fpEmail').value || '').trim();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) { authMsg('Please enter a valid email address.', 'err'); return; }
+      FP_BUSY = true;
+      const sBtn = document.getElementById('fpSendBtn'), rBtn = document.getElementById('fpResend');
+      const oldTxt = sBtn.textContent;
+      sBtn.disabled = true; sBtn.textContent = 'Sending code\u2026'; rBtn.disabled = true;
+      authMsg('Sending your verification code\u2026', '');
+      try {
+        const r = await fetch('/api/forgot-password', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: em })
+        });
+        const d = await r.json().catch(() => ({}));
+        FP_EMAIL = em;
+        if (d && d.ok === false && d.error) { authMsg(d.error, 'err'); }
+        else {
+          fpShow(2); fpStartTimers();
+          document.getElementById('fpOtp').value = '';
+          document.getElementById('fpVerifyBtn').disabled = true;
+          authMsg(isResend ? 'A new code has been sent. The previous code is no longer valid.'
+            : 'If that email is registered, a verification code has been sent.', 'ok');
+          setTimeout(() => { const o = document.getElementById('fpOtp'); if (o) o.focus(); }, 60);
+        }
+      } catch (e) {
+        authMsg('Could not reach the mail service. Please try again.', 'err');
+      }
+      sBtn.disabled = false; sBtn.textContent = oldTxt; FP_BUSY = false;
+    }
+    async function fpVerify() {
+      if (FP_BUSY) return;
+      const code = String(document.getElementById('fpOtp').value || '').replace(/\D/g, '');
+      if (code.length !== 6) { authMsg('Enter the 6-digit code.', 'err'); return; }
+      if (!SB) { authMsg('Service unavailable. Please try again.', 'err'); return; }
+      FP_BUSY = true;
+      const b = document.getElementById('fpVerifyBtn'); b.disabled = true; b.textContent = 'Verifying\u2026';
+      try {
+        const { data } = await SB.rpc('verify_password_otp', { p_email: FP_EMAIL, p_code: code });
+        if (data && data.ok) {
+          FP_TOKEN = data.reset_token; fpStopTimers(); fpShow(3);
+          document.getElementById('fpNew').value = ''; document.getElementById('fpNew2').value = '';
+          fpCheckPw();
+          setTimeout(() => { const n = document.getElementById('fpNew'); if (n) n.focus(); }, 60);
+        } else {
+          authMsg((data && data.error) || 'That code is not valid.', 'err');
+          if (data && (data.expired || data.blocked)) {
+            fpStopTimers();
+            const rb = document.getElementById('fpResend'); rb.disabled = false; rb.textContent = 'Resend OTP';
+            document.getElementById('fpTimer').textContent = '';
+          }
+        }
+      } catch (e) { authMsg('Could not verify the code. Please try again.', 'err'); }
+      b.textContent = 'Verify OTP'; b.disabled = String(document.getElementById('fpOtp').value || '').replace(/\D/g, '').length !== 6;
+      FP_BUSY = false;
+    }
+    function fpRules(p) {
+      return { len: p.length >= 8, upper: /[A-Z]/.test(p), lower: /[a-z]/.test(p), num: /[0-9]/.test(p), spec: /[^A-Za-z0-9]/.test(p) };
+    }
+    function fpCheckPw() {
+      const p = document.getElementById('fpNew').value || '', p2 = document.getElementById('fpNew2').value || '';
+      const r = fpRules(p); let all = true;
+      document.querySelectorAll('#fpRules li').forEach(li => {
+        const ok = !!r[li.dataset.r]; li.classList.toggle('ok', ok); if (!ok) all = false;
+      });
+      const m = document.getElementById('fpMatch');
+      let match = false;
+      if (!p2) { m.textContent = ''; m.style.color = ''; }
+      else if (p === p2) { match = true; m.textContent = '\u2713 Passwords match'; m.style.color = '#8ff0c4'; }
+      else { m.textContent = '\u2717 Passwords do not match'; m.style.color = '#ffb3b0'; }
+      document.getElementById('fpSaveBtn').disabled = !(all && match);
+    }
+    async function fpSave() {
+      if (FP_BUSY) return;
+      const p = document.getElementById('fpNew').value || '', p2 = document.getElementById('fpNew2').value || '';
+      if (p !== p2) { authMsg('The two passwords do not match.', 'err'); return; }
+      if (!FP_TOKEN) { authMsg('This reset session has expired. Please start again.', 'err'); swapForgot(true); return; }
+      if (!SB) { authMsg('Service unavailable. Please try again.', 'err'); return; }
+      FP_BUSY = true;
+      const b = document.getElementById('fpSaveBtn'); b.disabled = true; b.textContent = 'Saving\u2026';
+      try {
+        const { data } = await SB.rpc('reset_password_with_otp', { p_reset_token: FP_TOKEN, p_new_password: p });
+        if (data && data.ok) {
+          FP_TOKEN = null; fpShow(4);
+          const li = document.getElementById('liUser'); if (li && data.user_id) li.value = data.user_id;
+          setTimeout(() => { if (document.getElementById('fpStep4').style.display === 'block') swapForgot(false); }, 6000);
+        } else { authMsg((data && data.error) || 'Could not reset the password.', 'err'); }
+      } catch (e) { authMsg('Could not reset the password. Please try again.', 'err'); }
+      b.textContent = 'Reset password'; b.disabled = false; FP_BUSY = false;
+    }
+
     function pwScore(p) { let s = 0; if (!p) return 0; if (p.length >= 4) s++; if (p.length >= 8) s++; if (/[A-Z]/.test(p)) s++; if (/[0-9]/.test(p)) s++; if (/[^A-Za-z0-9]/.test(p)) s++; return s; }
     function pwValid(p) { return !!p && p.length >= 4; }
     function pwStrength(p) {
@@ -7914,6 +8302,46 @@
     document.getElementById('btnXlsx').onclick = exportXlsx; document.getElementById('btnXlsx2').onclick = exportXlsx;
     document.getElementById('toRegister').onclick = () => swapAuth(true);
     document.getElementById('toLogin').onclick = () => swapAuth(false);
+    /* ---- forgot password wiring ---- */
+    document.getElementById('toForgot').onclick = () => {
+      const u = String(document.getElementById('liUser').value || '').trim();
+      if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(u)) document.getElementById('fpEmail').value = u;
+      swapForgot(true);
+      setTimeout(() => { const e = document.getElementById('fpEmail'); if (e) e.focus(); }, 60);
+    };
+    ['fpBack1', 'fpBack2', 'fpBack3', 'fpGoLogin'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.onclick = () => swapForgot(false);
+    });
+    document.getElementById('fpSendBtn').onclick = () => fpSendOtp(false);
+    document.getElementById('fpResend').onclick = () => fpSendOtp(true);
+    // "Already have a code?" — for when the email is slow to arrive
+    document.getElementById('fpHaveOtp').onclick = () => {
+      const em = String(document.getElementById('fpEmail').value || '').trim();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) { authMsg('Enter the email you used, then continue.', 'err'); return; }
+      FP_EMAIL = em; fpShow(2);
+      const rb = document.getElementById('fpResend'); rb.disabled = false; rb.textContent = 'Resend OTP';
+      document.getElementById('fpTimer').textContent = '';
+      setTimeout(() => { const o = document.getElementById('fpOtp'); if (o) o.focus(); }, 60);
+    };
+    document.getElementById('fpVerifyBtn').onclick = fpVerify;
+    document.getElementById('fpSaveBtn').onclick = fpSave;
+    // digits only + enable Verify only on a complete code
+    document.getElementById('fpOtp').oninput = e => {
+      const v = String(e.target.value || '').replace(/\D/g, '').slice(0, 6);
+      e.target.value = v;
+      document.getElementById('fpVerifyBtn').disabled = v.length !== 6;
+    };
+    document.getElementById('fpEmail').onkeydown = e => { if (e.key === 'Enter') fpSendOtp(false); };
+    document.getElementById('fpOtp').onkeydown = e => { if (e.key === 'Enter' && !document.getElementById('fpVerifyBtn').disabled) fpVerify(); };
+    document.getElementById('fpNew2').onkeydown = e => { if (e.key === 'Enter' && !document.getElementById('fpSaveBtn').disabled) fpSave(); };
+    // password visibility toggles
+    document.querySelectorAll('.pw-eye').forEach(btn => btn.onclick = () => {
+      const inp = document.getElementById(btn.dataset.for); if (!inp) return;
+      const show = inp.type === 'password';
+      inp.type = show ? 'text' : 'password';
+      btn.style.opacity = show ? 1 : .62;
+      btn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+    });
     document.getElementById('liBtn').onclick = doLogin; document.getElementById('rgBtn').onclick = doRegister;
     document.getElementById('userChip').onclick = e => { e.stopPropagation(); const pn = document.getElementById('userPanel'); (pn.style.display === 'block') ? closeUserPanel() : openUserPanel(); };
     document.getElementById('btnAdmin').onclick = openAdmin;

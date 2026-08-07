@@ -279,8 +279,58 @@ function accountLocked({ name, user_id, attempts, locked_until, portalUrl, logoU
   };
 }
 
+
+// 5. password reset OTP  (sent immediately by api/forgot-password.js)
+function passwordOtp({ name, code, minutes, user_id, portalUrl, logoUrl, version }) {
+  const mins = minutes || 15;
+  const body = `
+  <tr><td style="padding:30px 28px 0;">
+    <div style="font:700 20px/1.35 ${F};color:#0e2a43;letter-spacing:-.2px;">Your password reset code</div>
+    <div style="font:400 14px/1.65 ${F};color:#44586e;padding-top:11px;">
+      Hello <b style="color:#12314f;">${esc(name)}</b>,<br><br>
+      Use the verification code below to reset your Report Analyzer password.
+    </div>
+  </td></tr>
+  <tr><td style="padding:22px 28px 0;">
+    <div style="background:#eef4fb;border:1px solid #cfe0f2;border-radius:12px;padding:18px 10px;text-align:center;">
+      <div style="font:600 11px/1 ${F};letter-spacing:1.4px;text-transform:uppercase;color:#5a7a99;">Verification code</div>
+      <div style="font:700 34px/1.2 ${F};color:#0e2a43;letter-spacing:9px;padding-top:9px;">${esc(code)}</div>
+      <div style="font:400 12px/1.5 ${F};color:#5a7a99;padding-top:8px;">Valid for ${mins} minutes &middot; single use</div>
+    </div>
+  </td></tr>
+  ${detailRows([['Username', user_id], ['Requested on', fmtIST(new Date())]])}
+  ${noticeBar('Never share this code. VIESL staff will never ask you for it. If you did not request a password reset, you can ignore this email \u2014 your password stays unchanged.', '#fdeceb', '#8a2019')}`;
+  return {
+    subject: 'Your Report Analyzer verification code',
+    html: shell({ title: 'Password reset code', preheader: 'Your one-time verification code (valid ' + mins + ' minutes).',
+      logoUrl, version, body, accent: 'linear-gradient(90deg,#2f6db0 0%,#5b9bf8 100%)' })
+  };
+}
+
+// 6. password changed confirmation (queued to the outbox after a successful reset)
+function passwordChanged({ name, user_id, when, portalUrl, logoUrl, version }) {
+  const body = `
+  <tr><td style="padding:30px 28px 0;">
+    <div style="font:700 20px/1.35 ${F};color:#12634a;letter-spacing:-.2px;">&#10003; Your password has been changed</div>
+    <div style="font:400 14px/1.65 ${F};color:#44586e;padding-top:11px;">
+      Hello <b style="color:#12314f;">${esc(name)}</b>,<br><br>
+      Your Report Analyzer password was changed successfully. You can now sign in with your new password.
+      For your security you have been signed out on all devices.
+    </div>
+  </td></tr>
+  ${detailRows([['Username', user_id], ['Changed on', fmtIST(when || new Date())]])}
+  ${noticeBar('If you did not make this change, contact IT Support immediately using the details below.', '#fdeceb', '#8a2019')}
+  ${ctaButton(portalUrl, 'Sign in &nbsp;&rarr;', '#1d9e75')}`;
+  return {
+    subject: 'Your Report Analyzer password was changed',
+    html: shell({ title: 'Password changed', preheader: 'Your account password was changed successfully.',
+      logoUrl, version, body, accent: 'linear-gradient(90deg,#1d9e75 0%,#4bc79b 100%)' })
+  };
+}
+
 module.exports = {
   F, BRAND, CONTACTS, esc, nf, fmtIST,
   shell, header, contactCard, footer, ctaButton, detailRows, noticeBar,
-  approved, accountCreated, passwordReset, accountLocked
+  approved, accountCreated, passwordReset, accountLocked,
+  passwordOtp, passwordChanged
 };

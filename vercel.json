@@ -7,6 +7,9 @@
     },
     "api/send-report-email.js": {
       "maxDuration": 60
+    },
+    "api/forgot-password.js": {
+      "maxDuration": 20
     }
   },
   "headers": [

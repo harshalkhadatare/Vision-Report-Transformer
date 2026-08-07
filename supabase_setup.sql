@@ -1387,3 +1387,202 @@ grant execute on function public.share_resolve(uuid,text)                       
 grant execute on function public.admin_list_shares(uuid)                           to anon, authenticated;
 grant execute on function public.admin_revoke_share(uuid,uuid)                     to anon, authenticated;
 grant execute on function public.admin_save_schedule(uuid,uuid,text,jsonb,jsonb,text,text,jsonb,boolean,text,boolean) to anon, authenticated;
+
+-- ============================================================================
+-- FORGOT PASSWORD  —  email OTP reset
+--
+--   Flow:  request  ->  api/forgot-password (service)  ->  otp_issue_svc
+--          verify   ->  verify_password_otp        (anon, rate limited)
+--          reset    ->  reset_password_with_otp    (anon, one-time token)
+--
+--   Security notes
+--     * The OTP is NEVER stored or returned in plain text to the browser. Only a
+--       bcrypt hash is persisted; the clear code exists just long enough for the
+--       serverless mailer to put it in the email.
+--     * otp_issue_svc is the ONLY function that can see a code, it requires the
+--       shared mail secret and is NOT granted to anon — the browser cannot call
+--       it, so nobody can pull an OTP out of the API.
+--     * Requesting a new OTP supersedes every earlier pending code.
+--     * 5 wrong attempts burn the code; 15-minute expiry; single use.
+--     * Nothing here reveals whether an email exists: the caller always gets ok.
+--     * Passwords keep using the app's existing bcrypt (crypt/gen_salt('bf')).
+-- ============================================================================
+
+create table if not exists public.password_otp (
+  id            uuid primary key default gen_random_uuid(),
+  user_id       text not null,
+  email         text not null,
+  code_hash     text not null,               -- bcrypt of the 6-digit code
+  status        text not null default 'pending',   -- pending | used | superseded
+  attempts      int  not null default 0,
+  created_at    timestamptz not null default now(),
+  expires_at    timestamptz not null,
+  used_at       timestamptz,
+  reset_token   uuid,                        -- issued on successful verification
+  reset_expires timestamptz
+);
+create index if not exists password_otp_lookup_idx on public.password_otp (email, status, created_at desc);
+create index if not exists password_otp_token_idx  on public.password_otp (reset_token);
+alter table public.password_otp enable row level security;   -- no policies: RPC-only
+
+-- ---------------------------------------------------------------------------
+-- SERVICE ONLY. Issues a code and returns it so the mailer can send it.
+-- Returns ok=true even when the address is unknown (no account enumeration);
+-- 'send' tells the caller whether there is actually an email to deliver.
+-- ---------------------------------------------------------------------------
+create or replace function public.otp_issue_svc(p_secret text, p_email text)
+returns json language plpgsql security definer set search_path = public, extensions as $$
+declare v_secret text; v record; v_code text; v_b bytea; v_recent int; v_last timestamptz; v_id uuid;
+begin
+  select value into v_secret from public.app_config where key = 'mail_secret';
+  if v_secret is null or p_secret is distinct from v_secret then
+    return json_build_object('ok',false,'error','Not authorised.');
+  end if;
+
+  select * into v from public.app_users
+   where lower(email) = lower(trim(coalesce(p_email,''))) and status = 'approved';
+  if v.id is null then
+    return json_build_object('ok',true,'send',false);       -- unknown / not approved
+  end if;
+
+  -- throttle: 30s between requests, max 3 in any 15 minutes
+  select max(created_at), count(*) into v_last, v_recent
+    from public.password_otp
+   where email = lower(v.email) and created_at > now() - interval '15 minutes';
+  if v_last is not null and v_last > now() - interval '30 seconds' then
+    return json_build_object('ok',true,'send',false,'throttled',true);
+  end if;
+  if coalesce(v_recent,0) >= 3 then
+    return json_build_object('ok',true,'send',false,'throttled',true);
+  end if;
+
+  -- any earlier code stops working the moment a new one is issued
+  update public.password_otp set status = 'superseded'
+   where email = lower(v.email) and status = 'pending';
+
+  -- cryptographically random 6-digit code
+  v_b := gen_random_bytes(3);
+  v_code := lpad( ((get_byte(v_b,0)::bigint * 65536
+                  + get_byte(v_b,1)::bigint * 256
+                  + get_byte(v_b,2)::bigint) % 1000000)::text, 6, '0');
+
+  insert into public.password_otp (user_id, email, code_hash, expires_at)
+  values (v.user_id, lower(v.email), crypt(v_code, gen_salt('bf')), now() + interval '15 minutes')
+  returning id into v_id;
+
+  perform public.log_activity(v.user_id, v.name, 'otp_requested', 'password reset code issued');
+  return json_build_object('ok',true,'send',true,'id',v_id,
+                           'code',v_code,'email',v.email,'name',v.name,
+                           'user_id',v.user_id,'minutes',15);
+end; $$;
+
+-- ---------------------------------------------------------------------------
+-- Verify a code. Generic errors only — never confirms an address exists.
+-- ---------------------------------------------------------------------------
+create or replace function public.verify_password_otp(p_email text, p_code text)
+returns json language plpgsql security definer set search_path = public, extensions as $$
+declare o record; v_tok uuid; v_email text; v_code text;
+begin
+  v_email := lower(trim(coalesce(p_email,'')));
+  v_code  := regexp_replace(coalesce(p_code,''), '\s', '', 'g');
+  if v_email = '' or v_code = '' then
+    return json_build_object('ok',false,'error','Enter the 6-digit code sent to your email.');
+  end if;
+
+  select * into o from public.password_otp
+   where email = v_email and status = 'pending'
+   order by created_at desc limit 1;
+
+  if o.id is null then
+    return json_build_object('ok',false,'error','That code is not valid. Please request a new one.');
+  end if;
+  if o.expires_at <= now() then
+    update public.password_otp set status = 'superseded' where id = o.id;
+    return json_build_object('ok',false,'expired',true,
+      'error','This code has expired. Please request a new one.');
+  end if;
+  if o.attempts >= 5 then
+    update public.password_otp set status = 'superseded' where id = o.id;
+    return json_build_object('ok',false,'blocked',true,
+      'error','Too many incorrect attempts. Please request a new code.');
+  end if;
+
+  if o.code_hash <> crypt(v_code, o.code_hash) then
+    update public.password_otp set attempts = attempts + 1 where id = o.id;
+    if o.attempts + 1 >= 5 then
+      update public.password_otp set status = 'superseded' where id = o.id;
+      return json_build_object('ok',false,'blocked',true,
+        'error','Too many incorrect attempts. Please request a new code.');
+    end if;
+    return json_build_object('ok',false,'left',5 - (o.attempts + 1),
+      'error','Incorrect code. ' || (5 - (o.attempts + 1)) || ' attempt(s) remaining.');
+  end if;
+
+  -- correct: burn the code and hand back a short-lived one-time reset token
+  v_tok := gen_random_uuid();
+  update public.password_otp
+     set status = 'used', used_at = now(),
+         reset_token = v_tok, reset_expires = now() + interval '15 minutes'
+   where id = o.id;
+  return json_build_object('ok',true,'reset_token',v_tok);
+end; $$;
+
+-- ---------------------------------------------------------------------------
+-- Consume the reset token and set the new password (same bcrypt as everywhere).
+-- ---------------------------------------------------------------------------
+create or replace function public.reset_password_with_otp(p_reset_token uuid, p_new_password text)
+returns json language plpgsql security definer set search_path = public, extensions as $$
+declare o record; u record; p text;
+begin
+  p := coalesce(p_new_password,'');
+  select * into o from public.password_otp
+   where reset_token = p_reset_token and status = 'used'
+     and reset_expires is not null and reset_expires > now();
+  if o.id is null then
+    return json_build_object('ok',false,'error','This reset session has expired. Please start again.');
+  end if;
+
+  if char_length(p) < 8                    then return json_build_object('ok',false,'error','Password must be at least 8 characters.'); end if;
+  if p !~ '[A-Z]'                          then return json_build_object('ok',false,'error','Password must include an uppercase letter.'); end if;
+  if p !~ '[a-z]'                          then return json_build_object('ok',false,'error','Password must include a lowercase letter.'); end if;
+  if p !~ '[0-9]'                          then return json_build_object('ok',false,'error','Password must include a number.'); end if;
+  if p !~ '[^A-Za-z0-9]'                   then return json_build_object('ok',false,'error','Password must include a special character.'); end if;
+
+  select * into u from public.app_users where user_id = o.user_id;
+  if u.id is null then return json_build_object('ok',false,'error','This reset session is no longer valid.'); end if;
+
+  update public.app_users
+     set password_hash   = crypt(p, gen_salt('bf')),
+         failed_attempts = 0,
+         locked_until    = null,
+         session_token   = null              -- sign out any existing session
+   where id = u.id;
+
+  -- token is single use
+  update public.password_otp
+     set reset_token = null, reset_expires = null
+   where id = o.id;
+
+  -- confirmation mail (queued through the existing transactional outbox)
+  if u.email is not null and u.email <> '' then
+    insert into public.mail_outbox (template, to_email, to_name, payload)
+    values ('passwordChanged', u.email, u.name,
+            jsonb_build_object('name',u.name,'user_id',u.user_id,'when',now()));
+  end if;
+
+  perform public.log_activity(u.user_id, u.name, 'password_reset', 'via email OTP');
+  return json_build_object('ok',true,'user_id',u.user_id);
+end; $$;
+
+-- The browser may verify and reset, but must NEVER be able to mint a code.
+-- Postgres grants EXECUTE to PUBLIC by default, so revoking from anon alone
+-- would still leave the function reachable with the anon key — revoke PUBLIC
+-- as well and hand execute rights only to the service role the mailer uses.
+revoke all on function public.otp_issue_svc(text,text) from public, anon, authenticated;
+grant execute on function public.otp_issue_svc(text,text)             to service_role;
+grant execute on function public.verify_password_otp(text,text)      to anon, authenticated;
+grant execute on function public.reset_password_with_otp(uuid,text)  to anon, authenticated;
+
+-- Belt and braces: the OTP table is RLS-enabled with no policies (so PostgREST
+-- returns nothing), and no direct table rights are needed by the browser.
+revoke all on table public.password_otp from anon, authenticated;
