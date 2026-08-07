@@ -1582,12 +1582,23 @@ end; $$;
 -- The browser may verify and reset, but must NEVER be able to mint a code.
 -- Postgres grants EXECUTE to PUBLIC by default, so revoking from anon alone
 -- would still leave the function reachable with the anon key — revoke PUBLIC
--- as well and hand execute rights only to the service role the mailer uses.
+-- as well and hand execute rights only to the roles the server uses.
 revoke all on function public.otp_issue_svc(text,text) from public, anon, authenticated;
-grant execute on function public.otp_issue_svc(text,text)             to service_role;
+do $$
+begin
+  -- service_role is what the serverless mailer authenticates as; postgres is the
+  -- owner. Wrapped so a missing role on a non-Supabase database cannot abort the
+  -- whole script (which would leave the reset flow half-installed).
+  begin execute 'grant execute on function public.otp_issue_svc(text,text) to service_role'; exception when others then null; end;
+  begin execute 'grant execute on function public.otp_issue_svc(text,text) to postgres';     exception when others then null; end;
+end $$;
 grant execute on function public.verify_password_otp(text,text)      to anon, authenticated;
 grant execute on function public.reset_password_with_otp(uuid,text)  to anon, authenticated;
 
 -- Belt and braces: the OTP table is RLS-enabled with no policies (so PostgREST
 -- returns nothing), and no direct table rights are needed by the browser.
 revoke all on table public.password_otp from anon, authenticated;
+
+-- Ask PostgREST to reload its schema cache so the new functions are visible
+-- immediately instead of after the next restart.
+notify pgrst, 'reload schema';

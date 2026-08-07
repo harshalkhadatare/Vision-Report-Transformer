@@ -114,12 +114,21 @@ module.exports = async (req, res) => {
       const detail = (out && (out.message || out.hint)) || raw.slice(0, 300);
       console.error('OTP: otp_issue_svc HTTP', r.status, detail);
       const missingFn = r.status === 404 || /PGRST202|could not find the function|does not exist/i.test(detail || '');
+      const denied = r.status === 403 || /permission denied/i.test(detail || '');
+      const badKey = r.status === 401 || /invalid api key|jwt/i.test(detail || '');
       res.status(200).json({
         ok: false,
-        code: missingFn ? 'OTP_RPC_MISSING' : 'OTP_RPC_ERROR',
+        code: missingFn ? 'OTP_RPC_MISSING' : denied ? 'OTP_RPC_DENIED' : badKey ? 'OTP_RPC_BADKEY' : 'OTP_RPC_ERROR',
+        // The database's own words: this is a setup fault, not account data, so
+        // showing it is safe and it is the only way to fix this without guessing.
         error: missingFn
-          ? 'Password reset is not set up on the database yet. Please ask IT to re-run supabase_setup.sql.'
-          : 'The reset service could not reach the database. Please contact IT Support.'
+          ? 'Password reset is not set up on the database yet \u2014 re-run supabase_setup.sql.'
+          : denied
+            ? 'The database refused the call (permission denied on otp_issue_svc). Re-run the grants at the end of supabase_setup.sql.'
+            : badKey
+              ? 'The server\u2019s SUPABASE_SERVICE_KEY is missing or invalid. Please update it in Vercel.'
+              : ('The reset service could not reach the database (HTTP ' + r.status + '): '
+                + String(detail || '').replace(/\s+/g, ' ').slice(0, 180))
       });
       return;
     }
