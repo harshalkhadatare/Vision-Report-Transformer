@@ -44,7 +44,8 @@ const REPORT_NAMES = {
   ageing: 'Ageing Report Analysis',
   sales: 'Sales Dashboard',
   bin: 'Bin / Equipment Values',
-  crusher: 'Crusher Report'
+  crusher: 'Crusher Report',
+  saleorder: 'Sales Order Status'
 };
 
 // Administrator contacts shown at the bottom of every alert.

@@ -3887,7 +3887,7 @@
     const REPORT_CATEGORIES = [
       { id: 'pm', label: 'P&M Reports', icon: '\uD83D\uDCC2', reports: ['rental', 'milling', 'bin', 'crusher'] },
       { id: 'store', label: 'Purchase & Store', icon: '\uD83D\uDCC2', reports: ['stock', 'pogin', 'ageing'] },
-      { id: 'sales', label: 'Sales', icon: '\uD83D\uDCC2', reports: ['sales'] }
+      { id: 'sales', label: 'Sales', icon: '\uD83D\uDCC2', reports: ['sales', 'saleorder'] }
     ];
     const SN_OPEN_KEY = 'vi_nav_open';
     const LOCK_TIP = "You don't have permission to access this report. Please contact your administrator.";
@@ -7410,6 +7410,361 @@
         sheetName: 'Crusher Report', exportName: 'VisionInfra-Crusher-Report',
         process, kpis, charts, columns, tableColumns, filters, cascadeFilters: true,
         searchKeys: ['docNo', 'client', 'siteCode', 'siteLoc', 'eqp', 'fleet', 'make', 'model', 'status', 'shift', 'monthLabel'],
+        exportExcel
+      };
+    })();
+
+
+    /* ===================== SALES ORDER STATUS REPORT ===================== */
+    /* Reverse-engineered from SALE9.XLSX (Master Sheet -> Dashboard, Sheet2),
+       validated to the paisa against every figure in the reference.
+
+       Logic proven from the workbook's own formulas / pivot definitions:
+         Dashboard  = SUMIF() over hand-typed labels, ranged M2:M2467 / O2:O2467
+                      => the last 5 sheet rows (3 blank + a stray total) are NOT
+                      data. Real line items = rows carrying a Sale Order Number
+                      (2,466), which is exactly what COUNTA(UNIQUE(A2:A2467))
+                      and SUM(M2:M2467) reconcile to.
+         Executed Value = Sale Taxable Amount - Order in Hand   (=B5-B6, =B14-C14)
+         % Pending      = Order in Hand / Sale Order Value      (=IF(B5=0,0,B6/B5))
+         % of Total     = row value / grand total               (=B14/$B$18)
+         No. of Vendors = COUNTA(UNIQUE(Vendor Name)) but the reference shows 284
+                      for 285 distinct spellings: "SRC Infra Developers Private
+                      Limited" and "SRC INFRA DEVELOPERS PRIVATE LIMITED" collapse,
+                      so vendors are grouped CASE-INSENSITIVELY (first-seen casing
+                      is displayed) — the same Excel behaviour used by Bin/Crusher.
+         Sheet2     = two real PivotTables (alphabetical): DIVISION x Item Sub Class
+                      and Item Sub Class, each summing Sale Taxable + Order in Hand.
+       Vendor block is ranked by Sale Order Value desc, stable on first appearance.
+       Note the ERP's own header typos are preserved on export ("Sale Taxale
+       Amount", "Unit of Measurment"). */
+    REPORTS.saleorder = (function () {
+      const COLS = {
+        soNo: ['saleordernumber'], soDate: ['saleorderdate'], party: ['partynumber'],
+        vendor: ['vendorname'], pwo: ['partyworkorderno'], pwoDate: ['partyworkorderdate'],
+        loc: ['salelocation'], itemCode: ['itemcode'], itemDesc: ['itemdescription'],
+        uom: ['unitofmeasurment', 'unitofmeasurement'], qty: ['orderqty'], rate: ['itemrate'],
+        amount: ['saletaxaleamount', 'saletaxableamount'], pendQty: ['saleorderpendingqty'],
+        orderInHand: ['orderinhandsaleorderpendingamount', 'orderinhand'],
+        itemClassCode: ['itemclass'], cpc: ['cpc'], division: ['division'],
+        postFlag: ['postflag'], status: ['orderstatus'],
+        itemClass: ['itemclass2'], subClass: ['itemsubclass'],
+        department: ['itemdepartment'], otherDetails: ['itemotherdetails']
+      };
+      let MASTER_COLS = [];
+      const upk = v => String(v == null ? '' : v).trim().toUpperCase();
+      const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const mLabel = d => (d instanceof Date && !isNaN(d)) ? MON[d.getMonth()] + '-' + d.getFullYear() : '\u2014';
+
+      function pickMasterAoa(wb) {
+        const names = wb.SheetNames || [];
+        const name = names.find(n => norm(n) === 'mastersheet')
+          || names.find(n => norm(n).includes('master'))
+          || names.find(n => ['mainshet', 'mainsheet', 'data'].indexOf(norm(n)) !== -1)
+          || names[0];
+        return XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: '', raw: true });
+      }
+
+      function process(wb) {
+        const aoa = pickMasterAoa(wb); if (!aoa.length) throw new Error('The sheet is empty.');
+        const hi = findHeader(aoa, ['saleordernumber', 'vendorname', 'saletaxaleamount', 'orderstatus']);
+        const headers = (aoa[hi] || []).map(String);
+        // "Item Class" appears TWICE in the ERP dump (code + description). mapCols
+        // assigns each header once, so pre-resolve the pair by position: the first
+        // is the short code (RN/CN), the later one the description (Rental Income).
+        const m = mapCols(headers, COLS);
+        const icIdx = []; headers.forEach((h, i) => { if (norm(h) === 'itemclass') icIdx.push(i); });
+        if (icIdx.length >= 2) { m.itemClassCode = icIdx[0]; m.itemClass = icIdx[1]; }
+        for (const f of ['soNo', 'vendor', 'amount', 'orderInHand'])
+          if (m[f] === undefined)
+            throw new Error('This does not look like a Sale Order dump. Expected columns like '
+              + 'Sale Order Number, Vendor Name, Sale Taxale Amount, Order in Hand (missing: ' + f + ').');
+
+        const NUMF = { qty: 1, rate: 1, amount: 1, pendQty: 1, orderInHand: 1 };
+        const DATEF = { soDate: 1, pwoDate: 1 };
+        const fieldByIdx = {}; for (const f in m) if (m[f] != null) fieldByIdx[m[f]] = f;
+        MASTER_COLS = [];
+        headers.forEach((h, idx) => {
+          const f = fieldByIdx[idx]; if (!f) return;
+          MASTER_COLS.push({ key: f, header: String(h), idx: idx, num: !!NUMF[f], date: !!DATEF[f] });
+        });
+        const masterIdx = MASTER_COLS.map(c => c.idx);
+        const S = (r, i) => i == null ? '' : String(r[i] == null ? '' : r[i]).trim();
+
+        const rows = [];
+        for (let i = hi + 1; i < aoa.length; i++) {
+          const r = aoa[i]; if (!r || !r.length) continue;
+          const soNo = S(r, m.soNo);
+          // A line item is defined by having a Sale Order Number — this is what the
+          // reference's SUM/COUNTA ranges reconcile to and it drops the trailing
+          // blank rows and the stray total the ERP leaves behind.
+          if (!soNo) continue;
+          const amt = numv(r[m.amount]), oih = numv(r[m.orderInHand]);
+          const d = m.soDate != null ? toDate(r[m.soDate]) : null;
+          rows.push({
+            soNo: soNo, soDate: d, soMonth: mLabel(d),
+            party: S(r, m.party), vendor: S(r, m.vendor), pwo: S(r, m.pwo),
+            loc: S(r, m.loc), itemCode: S(r, m.itemCode), itemDesc: S(r, m.itemDesc),
+            uom: S(r, m.uom), qty: numv(r[m.qty]), rate: numv(r[m.rate]),
+            amount: amt, pendQty: numv(r[m.pendQty]), orderInHand: oih,
+            executed: amt - oih,                                  // =B5-B6 in the reference
+            itemClassCode: S(r, m.itemClassCode), cpc: S(r, m.cpc),
+            division: S(r, m.division), postFlag: S(r, m.postFlag) || '\u2014',
+            status: S(r, m.status), itemClass: S(r, m.itemClass),
+            subClass: S(r, m.subClass), department: S(r, m.department),
+            otherDetails: S(r, m.otherDetails),
+            _m: masterIdx.map(ci => r[ci])
+          });
+        }
+        const orders = new Set(rows.map(r => r.soNo)).size;
+        const vendors = new Set(rows.map(r => upk(r.vendor))).size;
+        return { rows, note: `Read ${fmtN(rows.length)} order lines across ${fmtN(orders)} sale orders and ${fmtN(vendors)} vendors.` };
+      }
+
+      /* ---- shared aggregation (identical maths for dashboard and export) ---- */
+      function groupBy(data, keyFn, attrFn) {
+        const map = new Map();
+        for (let i = 0; i < data.length; i++) {
+          const r = data[i], k = keyFn(r);
+          let g = map.get(k);
+          if (!g) { g = { _k: k, _i: map.size, sv: 0, oh: 0, ex: 0, n: 0, orders: new Set() }; if (attrFn) attrFn(g, r); map.set(k, g); }
+          g.sv += r.amount; g.oh += r.orderInHand; g.ex += r.executed; g.n++; g.orders.add(r.soNo);
+        }
+        return [...map.values()];
+      }
+      const byVal = (a, b) => (b.sv - a.sv) || (a._i - b._i);   // value desc, stable
+
+      function kpis(view) {
+        const sv = sum(view, 'amount'), oh = sum(view, 'orderInHand'), ex = sv - oh;
+        const orders = new Set(view.map(r => r.soNo)).size;
+        const vendors = new Set(view.map(r => upk(r.vendor)).filter(v => v)).size;
+        return [
+          ['Sale Order Value', crore(sv), 'total taxable order value', '#2f6db0'],
+          ['Order in Hand', crore(oh), 'pending / unexecuted value', '#e08a1e'],
+          ['Executed Value', crore(ex), 'order value \u2212 order in hand', '#1d9e75'],
+          ['% Pending', fmtPct(sv ? oh / sv : 0), 'share still to execute', '#d8504c'],
+          ['Sale Orders', fmtN(orders), 'distinct order numbers', '#7c5cbf'],
+          ['Vendors', fmtN(vendors), 'distinct customers', '#0891b2'],
+          ['Order Lines', fmtN(view.length), 'line items in view', '#8a98a4'],
+          ['Avg Order Value', crore(orders ? sv / orders : 0), 'per sale order', '#163a5c']
+        ];
+      }
+
+      function charts(view) {
+        const opts = g => ({ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, ...g });
+        const PIE = ['#2f6db0', '#1d9e75', '#e08a1e', '#7c5cbf', '#0891b2', '#d8504c', '#163a5c', '#4c9f70', '#c2708f', '#8a98a4'];
+        const crTick = { ticks: { callback: v => fmtN(v / 1e7, 1) + ' Cr' } };
+        const pie = (title, sub, key, attr) => ({
+          title, sub, height: 310, legend: true, render(cv) {
+            const e = groupBy(view, r => upk(r[key]) || '\u2014', (g, r) => g.lab = (String(r[key] || '').trim() || '\u2014'))
+              .filter(x => x.sv > 0).sort(byVal);
+            const top = e.slice(0, 9), rest = e.slice(9);
+            if (rest.length) top.push({ lab: 'Others (' + rest.length + ')', sv: rest.reduce((s, x) => s + x.sv, 0) });
+            const tot = top.reduce((s, x) => s + x.sv, 0) || 1;
+            cv._legend = top.map((x, i) => `<span><i style="background:${PIE[i % PIE.length]}"></i>${x.lab} ${fmtPct(x.sv / tot)}</span>`).join('');
+            return new Chart(cv, {
+              type: 'pie', data: { labels: top.map(x => x.lab), datasets: [{ data: top.map(x => Math.round(x.sv)), backgroundColor: top.map((x, i) => PIE[i % PIE.length]), borderWidth: 2, borderColor: '#fff' }] },
+              options: opts({ plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => c.label + ': ' + crore(c.parsed) + ' (' + fmtPct(c.parsed / tot) + ')' } } } })
+            });
+          }
+        });
+        return [
+          {
+            title: 'Executed vs Order in Hand', sub: 'by division \u2014 \u20b9 value', height: 320, legend: true, render(cv) {
+              const e = groupBy(view, r => upk(r.division) || '\u2014', (g, r) => g.lab = (String(r.division || '').trim() || '\u2014')).sort(byVal);
+              cv._legend = '<span><i style="background:#1d9e75"></i>Executed</span><span><i style="background:#e08a1e"></i>Order in Hand</span>';
+              return new Chart(cv, {
+                type: 'bar', data: {
+                  labels: e.map(x => x.lab), datasets: [
+                    { label: 'Executed', data: e.map(x => Math.round(x.ex)), backgroundColor: '#1d9e75', borderRadius: 4 },
+                    { label: 'Order in Hand', data: e.map(x => Math.round(x.oh)), backgroundColor: '#e08a1e', borderRadius: 4 }]
+                },
+                options: opts({ scales: { x: { stacked: true }, y: { stacked: true, ...crTick } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => c.dataset.label + ': ' + crore(c.parsed.y) } } } })
+              });
+            }
+          },
+          pie('Division share', '% of \u20b9 sale order value', 'division'),
+          pie('Item class share', '% of \u20b9 sale order value', 'itemClass'),
+          pie('Item sub class share', 'top 9 + others', 'subClass'),
+          {
+            title: 'Top 12 vendors', sub: '\u20b9 sale order value', height: 360, render(cv) {
+              const e = groupBy(view, r => upk(r.vendor), (g, r) => g.lab = String(r.vendor || '').trim()).sort(byVal).slice(0, 12);
+              return new Chart(cv, { type: 'bar', data: { labels: e.map(x => x.lab.length > 30 ? x.lab.slice(0, 29) + '\u2026' : x.lab), datasets: [{ data: e.map(x => Math.round(x.sv)), backgroundColor: '#163a5c', borderRadius: 4 }] }, options: opts({ indexAxis: 'y', scales: { x: crTick, y: { ticks: { font: { size: 9.5 } } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => crore(c.parsed.x) } } } }) });
+            }
+          },
+          {
+            title: 'Order status split', sub: 'lines by processing status', height: 310, legend: true, render(cv) {
+              const e = groupBy(view, r => upk(r.status) || '\u2014', (g, r) => g.lab = (String(r.status || '').trim() || '\u2014')).sort((a, b) => b.n - a.n);
+              const tot = view.length || 1;
+              cv._legend = e.map((x, i) => `<span><i style="background:${PIE[i % PIE.length]}"></i>${x.lab} ${fmtPct(x.n / tot)}</span>`).join('');
+              return new Chart(cv, { type: 'doughnut', data: { labels: e.map(x => x.lab), datasets: [{ data: e.map(x => x.n), backgroundColor: e.map((x, i) => PIE[i % PIE.length]), borderWidth: 2, borderColor: '#fff' }] }, options: opts({ cutout: '58%', plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => c.label + ': ' + fmtN(c.parsed) + ' lines (' + fmtPct(c.parsed / tot) + ')' } } } }) });
+            }
+          },
+          {
+            title: 'Month-wise order booking', sub: '\u20b9 value by sale order date', height: 310, render(cv) {
+              const e = groupBy(view, r => (r.soDate instanceof Date && !isNaN(r.soDate)) ? (r.soDate.getFullYear() * 12 + r.soDate.getMonth()) : -1,
+                (g, r) => { g.lab = r.soMonth; g.mk = (r.soDate instanceof Date && !isNaN(r.soDate)) ? (r.soDate.getFullYear() * 12 + r.soDate.getMonth()) : -1; })
+                .filter(x => x.mk >= 0).sort((a, b) => a.mk - b.mk);
+              return new Chart(cv, { type: 'line', data: { labels: e.map(x => x.lab), datasets: [{ data: e.map(x => Math.round(x.sv)), borderColor: '#2f6db0', backgroundColor: 'rgba(47,109,176,.15)', fill: true, tension: .34, pointRadius: 3 }] }, options: opts({ scales: { y: crTick }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => crore(c.parsed.y) } } } }) });
+            }
+          },
+          {
+            title: 'Top 12 item departments', sub: '\u20b9 order in hand (pending)', height: 360, render(cv) {
+              const e = groupBy(view, r => upk(r.department) || '\u2014', (g, r) => g.lab = (String(r.department || '').trim() || '\u2014')).sort((a, b) => (b.oh - a.oh) || (a._i - b._i)).slice(0, 12);
+              return new Chart(cv, { type: 'bar', data: { labels: e.map(x => x.lab), datasets: [{ data: e.map(x => Math.round(x.oh)), backgroundColor: '#e08a1e', borderRadius: 4 }] }, options: opts({ indexAxis: 'y', scales: { x: crTick, y: { ticks: { font: { size: 9.5 } } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => crore(c.parsed.x) } } } }) });
+            }
+          }
+        ];
+      }
+
+      const columns = [
+        { key: '_sr', label: 'Sr No', type: 'sr' },
+        { key: 'soNo', label: 'Sale Order Number', type: 'text' }, { key: 'soDate', label: 'Sale Order Date', type: 'date' },
+        { key: 'party', label: 'Party Number', type: 'text' }, { key: 'vendor', label: 'Vendor Name', type: 'text' },
+        { key: 'pwo', label: 'Party Work Order No', type: 'text' }, { key: 'loc', label: 'Sale Location', type: 'text' },
+        { key: 'itemCode', label: 'Item Code', type: 'text' }, { key: 'itemDesc', label: 'Item Description', type: 'text' },
+        { key: 'uom', label: 'UOM', type: 'text' }, { key: 'qty', label: 'Order Qty', type: 'num2' },
+        { key: 'rate', label: 'Item Rate', type: 'num2' }, { key: 'amount', label: 'Sale Taxable Amount', type: 'num2' },
+        { key: 'pendQty', label: 'Pending Qty', type: 'num2' }, { key: 'orderInHand', label: 'Order in Hand', type: 'num2' },
+        { key: 'executed', label: 'Executed Value', type: 'num2' },
+        { key: 'division', label: 'Division', type: 'text' }, { key: 'status', label: 'Order Status', type: 'text' },
+        { key: 'itemClass', label: 'Item Class', type: 'text' }, { key: 'subClass', label: 'Item Sub Class', type: 'text' },
+        { key: 'department', label: 'Item Department', type: 'text' }, { key: 'otherDetails', label: 'Item Other Details', type: 'text' },
+        { key: 'postFlag', label: 'Post Flag', type: 'text' }, { key: 'soMonth', label: 'Month', type: 'text' }
+      ];
+      const tableColumns = columns.map(c => ({ key: c.key, label: c.label, fmt: c.type === 'sr' ? 'sr' : c.type === 'num2' ? 'num2' : c.type === 'date' ? 'date' : 'text' }));
+      const filters = [
+        { key: 'day', label: 'Order date (calendar)', type: 'calendar', from: 'soDate', to: 'soDate' },
+        { key: 'soMonth', label: 'Month', multi: true, sort: 'month' },
+        { key: 'division', label: 'Division', multi: true }, { key: 'status', label: 'Order Status', multi: true },
+        { key: 'itemClass', label: 'Item Class', multi: true }, { key: 'subClass', label: 'Item Sub Class', multi: true },
+        { key: 'department', label: 'Item Department', multi: true }, { key: 'vendor', label: 'Vendor', multi: true },
+        { key: 'loc', label: 'Sale Location', multi: true }, { key: 'postFlag', label: 'Post Flag', multi: true }
+      ];
+
+      /* ---------------- Excel export: Master Sheet + Dashboard + Sheet2 ---------------- */
+      const NUM2 = '#,##,##0.00';                       // Indian grouping
+      const PCT = '0.00%';
+      async function exportExcel(fileName) {
+        const data = (typeof VIEW !== 'undefined' && Array.isArray(VIEW)) ? VIEW : RAW;
+        const wb = new ExcelJS.Workbook(); wb.creator = COMPANY.name; wb.created = new Date();
+        const HEAD = 'FF0E2A43', THIN = { style: 'thin', color: { argb: 'FFBFC8D4' } };
+        const bd = { top: THIN, left: THIN, bottom: THIN, right: THIN };
+        const ALT = 'FFF6F9FC', TOTBG = 'FFDCE6F4';
+        const hCell = (c, t) => { c.value = t; c.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11, name: 'Calibri' }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEAD } }; c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }; c.border = bd; };
+        const tCell = (c, v, o) => { c.value = v; c.border = bd; c.font = { size: 10.5, name: 'Calibri', bold: !!(o && o.bold) }; c.alignment = { horizontal: 'left' }; if (o && o.fill) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: o.fill } }; };
+        const nCell = (c, v, o) => { c.value = (v === null || v === undefined) ? null : v; c.numFmt = (o && o.fmt) || NUM2; c.border = bd; c.font = { size: 10.5, name: 'Calibri', bold: !!(o && o.bold) }; c.alignment = { horizontal: 'right' }; if (o && o.fill) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: o.fill } }; };
+        const title = (ws, addr, t, sz) => { const c = ws.getCell(addr); c.value = t; c.font = { bold: true, size: sz || 12.5, name: 'Calibri', color: { argb: 'FF0E2A43' } }; };
+
+        /* ===== 1. Master Sheet (verbatim echo of the uploaded ERP sheet) ===== */
+        const mcols = (MASTER_COLS && MASTER_COLS.length) ? MASTER_COLS
+          : columns.filter(c => c.type !== 'sr').map(c => ({ key: c.key, header: c.label, num: c.type === 'num2', date: c.type === 'date' }));
+        const wsM = wb.addWorksheet('Master Sheet', { views: [{ state: 'frozen', ySplit: 1 }] });
+        mcols.forEach((c, i) => hCell(wsM.getRow(1).getCell(i + 1), c.header));
+        for (let ri = 0; ri < data.length; ri++) {
+          const r = data[ri], row = wsM.getRow(ri + 2), rm = (r._m && r._m.length === mcols.length) ? r._m : null;
+          for (let i = 0; i < mcols.length; i++) {
+            const c = mcols[i], v = rm ? rm[i] : r[c.key], cell = row.getCell(i + 1);
+            if (c.num) cell.value = (v === '' || v == null) ? null : (+v || 0);
+            else if (c.date) { const dt = toDate(v); cell.value = (dt instanceof Date && !isNaN(dt)) ? new Date(dt.getTime() - dt.getTimezoneOffset() * 60000) : (v == null ? '' : v); }
+            else cell.value = (v == null ? '' : v);
+          }
+        }
+        mcols.forEach((c, i) => {
+          const col = wsM.getColumn(i + 1);
+          col.width = c.num ? 16 : Math.min(Math.max(String(c.header).length + 2, 12), 36);
+          if (c.num) col.numFmt = NUM2; else if (c.date) col.numFmt = 'dd-mmm-yyyy';
+        });
+        wsM.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: mcols.length } };
+
+        /* ---- aggregates (same helpers the dashboard uses) ---- */
+        const sv = data.reduce((s, r) => s + r.amount, 0);
+        const oh = data.reduce((s, r) => s + r.orderInHand, 0);
+        const ex = sv - oh;
+        const orders = new Set(data.map(r => r.soNo)).size;
+        const vendorsN = new Set(data.map(r => upk(r.vendor)).filter(v => v)).size;
+        const gDiv = groupBy(data, r => upk(r.division) || '\u2014', (g, r) => g.lab = (String(r.division || '').trim() || '\u2014')).sort((a, b) => a._k < b._k ? -1 : a._k > b._k ? 1 : 0);
+        const gCls = groupBy(data, r => upk(r.itemClass) || '\u2014', (g, r) => g.lab = (String(r.itemClass || '').trim() || '\u2014')).sort(byVal);
+        const gVen = groupBy(data, r => upk(r.vendor), (g, r) => g.lab = String(r.vendor || '').trim()).sort(byVal);
+
+        /* ===== 2. Dashboard ===== */
+        const ws1 = wb.addWorksheet('Dashboard', { views: [{ showGridLines: false }] });
+        title(ws1, 'A1', 'SALE ORDER DASHBOARD', 15);
+        { const c = ws1.getCell('A2'); c.value = 'Source: Master Sheet | Line items: ' + fmtN(data.length); c.font = { size: 10.5, name: 'Calibri', italic: true, color: { argb: 'FF5A6B7B' } }; }
+        title(ws1, 'A4', 'KEY METRICS');
+        const km = [['Total Sale Order Value', sv, NUM2], ['Order in Hand (Pending Value)', oh, NUM2],
+        ['Executed Value', ex, NUM2], ['% Pending', sv ? oh / sv : 0, PCT],
+        ['No. of Sale Orders', orders, '#,##0'], ['No. of Vendors', vendorsN, '#,##0']];
+        km.forEach((k, i) => { const r = ws1.getRow(5 + i); tCell(r.getCell(1), k[0]); nCell(r.getCell(2), k[1], { fmt: k[2] }); });
+        const block = (startRow, heading, label, list) => {
+          title(ws1, 'A' + startRow, heading);
+          const hr = ws1.getRow(startRow + 1);
+          [label, 'Sale Order Value', 'Order in Hand', 'Executed Value', '% of Total'].forEach((t, i) => hCell(hr.getCell(1 + i), t));
+          let r = startRow + 2;
+          list.forEach((g, i) => {
+            const row = ws1.getRow(r), fill = i % 2 ? ALT : null;
+            tCell(row.getCell(1), g.lab, { fill });
+            nCell(row.getCell(2), g.sv, { fill }); nCell(row.getCell(3), g.oh, { fill }); nCell(row.getCell(4), g.ex, { fill });
+            nCell(row.getCell(5), sv ? g.sv / sv : 0, { fill, fmt: PCT }); r++;
+          });
+          const t = ws1.getRow(r);
+          tCell(t.getCell(1), 'Grand Total', { bold: true, fill: TOTBG });
+          nCell(t.getCell(2), sv, { bold: true, fill: TOTBG }); nCell(t.getCell(3), oh, { bold: true, fill: TOTBG });
+          nCell(t.getCell(4), ex, { bold: true, fill: TOTBG }); nCell(t.getCell(5), sv ? 1 : 0, { bold: true, fill: TOTBG, fmt: PCT });
+          return r + 2;
+        };
+        let nx = block(12, 'DIVISION WISE', 'Division', gDiv);
+        nx = block(nx, 'ITEM CLASS WISE', 'Item Class', gCls);
+        block(nx, 'VENDOR WISE (ranked by Sale Order Value)', 'Vendor', gVen);
+        ws1.getColumn(1).width = 44; for (let c = 2; c <= 5; c++) ws1.getColumn(c).width = 21;
+
+        /* ===== 3. Sheet2 (the two PivotTables, alphabetical like Excel) ===== */
+        const ws2 = wb.addWorksheet('Sheet2', { views: [{ showGridLines: false }] });
+        const cmp = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+        // pivot 1: DIVISION x Item Sub Class
+        ['DIVISION', 'Item Sub Class', 'Sum of Sale Taxale Amount', 'Sum of Order in Hand (Sale Order Pending Amount)']
+          .forEach((t, i) => hCell(ws2.getRow(3).getCell(1 + i), t));
+        const p1 = groupBy(data, r => upk(r.division) + '\u00A6' + upk(r.subClass),
+          (g, r) => { g.dv = (String(r.division || '').trim() || '\u2014'); g.sc = (String(r.subClass || '').trim() || '\u2014'); g.kd = upk(r.division); g.ks = upk(r.subClass); })
+          .sort((a, b) => cmp(a.kd, b.kd) || cmp(a.ks, b.ks));
+        let r2 = 4, lastDv = null;
+        p1.forEach((g, i) => {
+          const row = ws2.getRow(r2), fill = i % 2 ? ALT : null;
+          // Excel pivots print the outer label only on its first row
+          tCell(row.getCell(1), g.kd === lastDv ? '' : g.dv, { fill }); lastDv = g.kd;
+          tCell(row.getCell(2), g.sc, { fill });
+          nCell(row.getCell(3), g.sv, { fill }); nCell(row.getCell(4), g.oh, { fill }); r2++;
+        });
+        { const t = ws2.getRow(r2); tCell(t.getCell(1), 'Grand Total', { bold: true, fill: TOTBG }); tCell(t.getCell(2), '', { bold: true, fill: TOTBG }); nCell(t.getCell(3), sv, { bold: true, fill: TOTBG }); nCell(t.getCell(4), oh, { bold: true, fill: TOTBG }); }
+        // pivot 2: Item Sub Class only
+        const base = r2 + 8;
+        ['Row Labels', 'Sum of Sale Taxale Amount', 'Sum of Order in Hand (Sale Order Pending Amount)']
+          .forEach((t, i) => hCell(ws2.getRow(base).getCell(1 + i), t));
+        const p2 = groupBy(data, r => upk(r.subClass), (g, r) => g.sc = (String(r.subClass || '').trim() || '\u2014')).sort((a, b) => cmp(a._k, b._k));
+        let r3 = base + 1;
+        p2.forEach((g, i) => {
+          const row = ws2.getRow(r3), fill = i % 2 ? ALT : null;
+          tCell(row.getCell(1), g.sc, { fill }); nCell(row.getCell(2), g.sv, { fill }); nCell(row.getCell(3), g.oh, { fill }); r3++;
+        });
+        { const t = ws2.getRow(r3); tCell(t.getCell(1), 'Grand Total', { bold: true, fill: TOTBG }); nCell(t.getCell(2), sv, { bold: true, fill: TOTBG }); nCell(t.getCell(3), oh, { bold: true, fill: TOTBG }); }
+        ws2.getColumn(1).width = 26; ws2.getColumn(2).width = 32; ws2.getColumn(3).width = 26; ws2.getColumn(4).width = 30;
+
+        const buf = await wb.xlsx.writeBuffer();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+        a.download = fileName; a.click();
+      }
+
+      return {
+        meta: {
+          name: 'Sales Order Status',
+          tagline: 'Sale order value, order in hand & execution \u2014 by division, item class, vendor and month',
+          icon: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 13l2 2 4-4"/></svg>'
+        },
+        hint: 'Upload the ERP <b>Master Sheet</b> (Sale Order Number, Vendor Name, Sale Taxale Amount, Order in Hand, Division, Item Class / Sub Class). <b>Executed Value = Sale Order Value \u2212 Order in Hand</b>. Filter by order date, division, status, item class, vendor and more. The Excel export rebuilds <b>Master Sheet</b>, <b>Dashboard</b> and <b>Sheet2</b> exactly as the reference workbook.',
+        sheetName: 'Sales Order Status', exportName: 'VisionInfra-Sales-Order-Status',
+        process, kpis, charts, columns, tableColumns, filters, cascadeFilters: true,
+        searchKeys: ['soNo', 'vendor', 'party', 'pwo', 'itemCode', 'itemDesc', 'division', 'status', 'itemClass', 'subClass', 'department', 'loc'],
         exportExcel
       };
     })();
