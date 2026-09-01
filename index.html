@@ -3885,7 +3885,7 @@
     }
     /* ===================== REPORT CATEGORIES + SIDEBAR NAV ===================== */
     const REPORT_CATEGORIES = [
-      { id: 'pm', label: 'P&M Reports', icon: '\uD83D\uDCC2', reports: ['rental', 'milling', 'bin', 'crusher'] },
+      { id: 'pm', label: 'P&M Reports', icon: '\uD83D\uDCC2', reports: ['rental', 'milling', 'bin', 'crusher', 'pmmonthly'] },
       { id: 'store', label: 'Purchase & Store', icon: '\uD83D\uDCC2', reports: ['stock', 'pogin', 'ageing'] },
       { id: 'sales', label: 'Sales', icon: '\uD83D\uDCC2', reports: ['sales', 'saleorder'] }
     ];
@@ -7787,6 +7787,496 @@
         sheetName: 'Sales Order Status', exportName: 'VisionInfra-Sales-Order-Status',
         process, kpis, charts, columns, tableColumns, filters, cascadeFilters: true,
         searchKeys: ['soNo', 'vendor', 'party', 'pwo', 'itemCode', 'itemDesc', 'division', 'status', 'itemClass', 'subClass', 'department', 'loc'],
+        exportExcel
+      };
+    })();
+
+
+    /* ===================== P&M MONTHLY REPORT ===================== */
+    /* Reverse-engineered from Monthly REPORT.xlsx, validated row-by-row against
+       every column of the reference (475 equipment x 30 computed columns, plus the
+       134-row R2 pivot and its grand total).
+
+       TWO SOURCE SHEETS, joined on equipment number:
+         'Log Entry'    - one row per machine per shift/day (running, fuel, status)
+         'Master sheet' - spare-parts issues (repair & maintenance cost, YOM)
+
+       Formulas lifted verbatim from the reference:
+         Description/Fleet/Make/Model/Client/Site/State/Allotted = INDEX+MATCH on the
+             FIRST Log Entry row for that machine; YOM = INDEX+MATCH on Master sheet
+             (blank when the machine has no spares record - 156 of 475 here).
+         START/END DATE   = MINIFS/MAXIFS of Log Entry DATE
+         STARTING HMR     = MINIFS(STARTREADING) counting ONLY readings > 0
+         CLOSING HMR      = MAXIFS(ENDREADING)
+         RUNNING HRS      = IF(OR(start=0,close=0),0,close-start)   <- meter based
+         HDS ISSUE        = SUMIFS(HDS_ISSUE_QTY)
+         PRODUCTION       = SUMIFS(PRODUCTION);  PRODUCTIVITY = production/running
+         TOTAL DAYS       = COUNTIFS(equipment)              (log rows = days)
+         Working/Idle/Free Asset/Transit = COUNTIFS on STATUS
+         Breakdown & Maintenance = COUNTIFS("Breakdown") + COUNTIFS("Maintenance")
+         DEPLOYED DAYS    = TOTAL - Free Asset - Transit
+         BILLING DAYS     = DEPLOYED - Breakdown&Maintenance
+         UTILIZATION      = BILLING / TOTAL
+         WORKING STATUS   = "" if no days, "DH" if Free Asset = TOTAL, else "HIRE"
+         R&M COST         = SUMIFS(issued_amount) EXCLUDING fuel/coal material codes
+                            F00001, F00002, V12750   <- excluding these is essential
+         PER HOUR COST    = cost / running hrs
+         LOG RUNNING HRS  = SUMIFS(RUNNING_HRS)   (log total, vs meter difference)
+         METER VARIANCE   = RUNNING HRS - LOG RUNNING HRS
+       R2 = PivotTable of the above by Fleet / Make / Model, case-insensitive, with
+       Cost/Hr = cost/running recomputed at group level (not averaged). */
+    REPORTS.pmmonthly = (function () {
+      // 'Log Entry' columns
+      const LOGC = {
+        dc: ['dc'], dcDesc: ['dcdesc'], docNo: ['docno'], date: ['date'],
+        saleOrder: ['saleorderno'], client: ['partyname'], siteCode: ['sitecode'],
+        siteLoc: ['sitelocation'], eqp: ['equipmentnumber'], desc: ['description'],
+        make: ['make'], model: ['model'], chasis: ['chasisno'], fleet: ['fleettype'],
+        shift: ['shift'], startRd: ['startreading'], endRd: ['endreading'],
+        runHrs: ['runninghrs'], status: ['status'], remark: ['remark'],
+        production: ['production'], hds: ['hdsissueqty', 'hsdissueqty'],
+        hsdCons: ['hsdconsumption'], fuelAvg: ['fuelavrage', 'fuelaverage'],
+        operators: ['operatorcount'], mcGr: ['mcgr'], postFlag: ['postflag']
+      };
+      // 'Master sheet' (spare parts) columns
+      const MATC = {
+        eqp: ['equipment'], eqpDesc: ['equipmentdescription'], assetType: ['assettype'],
+        manufacturer: ['manufacturer'], modelNo: ['modelnumber'], yom: ['yom'],
+        capacity: ['capacity'], project: ['projctno', 'projectno'], locName: ['locname'],
+        orderType: ['ordertype'], matChar: ['materialcharacteristics'], subClass: ['subclass'],
+        itemType: ['itemtype'], materialNo: ['materialno'], materialDesc: ['materialdescription'],
+        issued: ['issued'], unitRate: ['unitrate'], issuedAmount: ['issuedamount'],
+        docNo: ['documentno'], docDate: ['documentdate'], reading: ['reading']
+      };
+      // fuel / coal codes the reference explicitly excludes from R&M cost
+      const EXCLUDED_MATERIALS = ['F00001', 'F00002', 'V12750'];
+      const BD_STATUSES = ['BREAKDOWN', 'MAINTENANCE'];
+      let SUMMARY = [], EXCLUDED_DESCR = [];
+      const upk = v => String(v == null ? '' : v).trim().toUpperCase();
+      const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const mLabel = d => (d instanceof Date && !isNaN(d)) ? MON[d.getMonth()] + '-' + d.getFullYear() : '\u2014';
+
+      /* Excel's sort order for the R2 pivot. Hyphens/apostrophes are ignorable, and a
+         non-breaking space ranks after a plain space but before digits — mapping it to
+         a punctuation character puts it in exactly that slot under ICU collation.
+         Verified to reproduce all 134 reference rows in order. */
+      const COLL = (typeof Intl !== 'undefined' && Intl.Collator) ? new Intl.Collator('en') : null;
+      const collKey = s => String(s == null ? '' : s).replace(/[-']/g, '').replace(/\u00a0/g, '#');
+      function xlCmp(a, b) {
+        a = String(a == null ? '' : a); b = String(b == null ? '' : b);
+        if (COLL) { const c = COLL.compare(collKey(a), collKey(b)); if (c) return c; return COLL.compare(a, b); }
+        const ka = collKey(a).toUpperCase(), kb = collKey(b).toUpperCase();
+        return ka < kb ? -1 : ka > kb ? 1 : (a < b ? -1 : a > b ? 1 : 0);
+      }
+
+      function sheetAoa(wb, tokens, fallbackIdx) {
+        const names = wb.SheetNames || [];
+        let name = null;
+        for (const t of tokens) { name = names.find(n => norm(n) === t); if (name) break; }
+        if (!name) for (const t of tokens) { name = names.find(n => norm(n).includes(t)); if (name) break; }
+        if (!name) name = names[fallbackIdx] || names[0];
+        return { name, aoa: XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: '', raw: true }) };
+      }
+
+      function process(wb) {
+        // ---- Log Entry (shift log, the primary source) ----
+        const L = sheetAoa(wb, ['logentry', 'log'], 0);
+        if (!L.aoa.length) throw new Error('The Log Entry sheet is empty.');
+        const lhi = findHeader(L.aoa, ['equipmentnumber', 'runninghrs', 'sitecode', 'fleettype']);
+        const lh = (L.aoa[lhi] || []).map(String); const lm = mapCols(lh, LOGC);
+        for (const f of ['eqp', 'status', 'date'])
+          if (lm[f] === undefined)
+            throw new Error('This does not look like a P&M Monthly dump. The Log Entry sheet needs '
+              + 'EQUIPMENTNUMBER, DATE and STATUS (missing: ' + f + ').');
+
+        // ---- Master sheet (spare parts issues) — optional but expected ----
+        const M = sheetAoa(wb, ['mastersheet', 'master'], 1);
+        let mm = {}, mhi = 0, mh = [];
+        const hasMat = M.aoa.length > 1;
+        if (hasMat) {
+          mhi = findHeader(M.aoa, ['equipment', 'issuedamount', 'materialno']);
+          mh = (M.aoa[mhi] || []).map(String); mm = mapCols(mh, MATC);
+        }
+
+        // ---------- pass 1: aggregate the spare-parts sheet per equipment ----------
+        const mat = new Map();            // equipment -> { cost, lines, qty, yom }
+        const matRows = [];
+        const exclSet = new Set(EXCLUDED_MATERIALS.map(x => x.toUpperCase()));
+        const exclDescr = new Map();
+        if (hasMat && mm.eqp != null) {
+          for (let i = mhi + 1; i < M.aoa.length; i++) {
+            const r = M.aoa[i]; if (!r || !r.length) continue;
+            const eq = String(r[mm.eqp] == null ? '' : r[mm.eqp]).trim(); if (!eq) continue;
+            const code = String(mm.materialNo != null ? (r[mm.materialNo] == null ? '' : r[mm.materialNo]) : '').trim();
+            const amt = numv(r[mm.issuedAmount]);
+            const isExcluded = exclSet.has(code.toUpperCase());
+            if (isExcluded && !exclDescr.has(code.toUpperCase()))
+              exclDescr.set(code.toUpperCase(), String(mm.materialDesc != null ? (r[mm.materialDesc] || '') : '').trim());
+            const k = upk(eq);
+            let o = mat.get(k);
+            if (!o) { o = { cost: 0, fuelCost: 0, lines: 0, qty: 0, yom: '' }; mat.set(k, o); }
+            // R&M cost EXCLUDES the fuel/coal codes, exactly as the reference SUMIFS does
+            if (isExcluded) o.fuelCost += amt; else { o.cost += amt; o.lines++; o.qty += numv(r[mm.issued]); }
+            if (!o.yom && mm.yom != null) { const y = String(r[mm.yom] == null ? '' : r[mm.yom]).trim(); if (y) o.yom = y; }
+            matRows.push({
+              eqp: eq, materialNo: code,
+              materialDesc: String(mm.materialDesc != null ? (r[mm.materialDesc] || '') : '').trim(),
+              itemType: String(mm.itemType != null ? (r[mm.itemType] || '') : '').trim(),
+              subClass: String(mm.subClass != null ? (r[mm.subClass] || '') : '').trim(),
+              matChar: String(mm.matChar != null ? (r[mm.matChar] || '') : '').trim(),
+              issued: numv(r[mm.issued]), unitRate: numv(r[mm.unitRate]), amount: amt,
+              excluded: isExcluded, docDate: mm.docDate != null ? toDate(r[mm.docDate]) : null
+            });
+          }
+        }
+        EXCLUDED_DESCR = EXCLUDED_MATERIALS.map(c => ({ code: c, desc: exclDescr.get(c.toUpperCase()) || 'not found' }));
+
+        // ---------- pass 2: walk the log once, aggregating per equipment ----------
+        const eqMap = new Map(); const order = [];
+        for (let i = lhi + 1; i < L.aoa.length; i++) {
+          const r = L.aoa[i]; if (!r || !r.length) continue;
+          const eq = String(r[lm.eqp] == null ? '' : r[lm.eqp]).trim(); if (!eq) continue;
+          const k = upk(eq);
+          let g = eqMap.get(k);
+          if (!g) {
+            g = {
+              eqp: eq, k: k,
+              // INDEX/MATCH pulls attributes from the FIRST matching log row
+              desc: String(r[lm.desc] == null ? '' : r[lm.desc]).trim(),
+              fleet: String(r[lm.fleet] == null ? '' : r[lm.fleet]).trim(),
+              make: String(r[lm.make] == null ? '' : r[lm.make]).trim(),
+              model: String(r[lm.model] == null ? '' : r[lm.model]).trim(),
+              client: String(r[lm.client] == null ? '' : r[lm.client]).trim(),
+              siteCode: String(r[lm.siteCode] == null ? '' : r[lm.siteCode]).trim(),
+              state: String(r[lm.siteLoc] == null ? '' : r[lm.siteLoc]).trim(),
+              allotted: String(r[lm.dcDesc] == null ? '' : r[lm.dcDesc]).trim(),
+              startDate: null, endDate: null, startHmr: 0, closeHmr: 0,
+              hds: 0, production: 0, logRun: 0, total: 0,
+              working: 0, breakdown: 0, maintenance: 0, idle: 0, freeAsset: 0, transit: 0
+            };
+            eqMap.set(k, g); order.push(g);
+          }
+          const d = toDate(r[lm.date]);
+          if (d instanceof Date && !isNaN(d)) {
+            if (!g.startDate || d < g.startDate) g.startDate = d;
+            if (!g.endDate || d > g.endDate) g.endDate = d;
+          }
+          const sr = numv(r[lm.startRd]), er = numv(r[lm.endRd]);
+          if (sr > 0 && (g.startHmr === 0 || sr < g.startHmr)) g.startHmr = sr;   // MINIFS(...,">0")
+          if (er > g.closeHmr) g.closeHmr = er;                                    // MAXIFS
+          g.hds += numv(r[lm.hds]); g.production += numv(r[lm.production]); g.logRun += numv(r[lm.runHrs]);
+          g.total++;
+          const st = upk(r[lm.status]);
+          if (st === 'WORKING') g.working++;
+          else if (st === 'BREAKDOWN') g.breakdown++;
+          else if (st === 'MAINTENANCE') g.maintenance++;
+          else if (st === 'IDLE') g.idle++;
+          else if (st === 'FREE ASSET') g.freeAsset++;
+          else if (st === 'TRANSIT') g.transit++;
+        }
+
+        // ---------- derive the Summary Report columns ----------
+        const rows = [];
+        order.forEach((g, i) => {
+          const mrec = mat.get(g.k) || { cost: 0, fuelCost: 0, lines: 0, qty: 0, yom: '' };
+          const running = (g.startHmr === 0 || g.closeHmr === 0) ? 0 : (g.closeHmr - g.startHmr);
+          const bdMaint = g.breakdown + g.maintenance;
+          const deployed = g.total - g.freeAsset - g.transit;
+          const billing = deployed - bdMaint;
+          rows.push({
+            sl: i + 1, eqp: g.eqp, desc: g.desc, fleet: g.fleet, make: g.make, model: g.model,
+            yom: mrec.yom, client: g.client, siteCode: g.siteCode, state: g.state,
+            workingStatus: g.total === 0 ? '' : (g.freeAsset === g.total ? 'DH' : 'HIRE'),
+            allotted: g.allotted, startDate: g.startDate, endDate: g.endDate,
+            month: mLabel(g.startDate),
+            startHmr: g.startHmr, closeHmr: g.closeHmr, running: running,
+            hds: g.hds, production: g.production,
+            productivity: running ? g.production / running : 0,
+            totalDays: g.total, deployedDays: deployed,
+            working: g.working, bdMaint: bdMaint, idle: g.idle,
+            freeAsset: g.freeAsset, transit: g.transit,
+            billingDays: billing,
+            utilization: g.total ? billing / g.total : 0,
+            cost: mrec.cost, fuelCost: mrec.fuelCost, partLines: mrec.lines,
+            perHourCost: running ? mrec.cost / running : 0,
+            logRun: g.logRun, meterVariance: running - g.logRun
+          });
+        });
+        // The reference lists machines sorted ascending by equipment code (SL NO =
+        // ROW()-1 over a sorted list), and that order also drives the pivot's item
+        // cache — so it decides which casing a repeated Make/Model displays with.
+        rows.sort((a, b) => xlCmp(a.eqp, b.eqp));
+        rows.forEach((r, i) => { r.sl = i + 1; });
+        SUMMARY = rows;
+        const fleets = new Set(rows.map(r => upk(r.fleet))).size;
+        return {
+          rows,
+          note: `Read ${fmtN(rows.length)} machines across ${fmtN(fleets)} fleet types `
+            + `from ${fmtN(L.aoa.length - lhi - 1)} log entries`
+            + (matRows.length ? ` and ${fmtN(matRows.length)} spare-part issues.` : '.')
+        };
+      }
+
+      function kpis(view) {
+        const run = sum(view, 'running'), cost = sum(view, 'cost'), hds = sum(view, 'hds');
+        const total = sum(view, 'totalDays'), billing = sum(view, 'billingDays');
+        const bd = sum(view, 'bdMaint'), work = sum(view, 'working');
+        return [
+          ['Machines', fmtN(view.length), 'equipment in view', '#2f6db0'],
+          ['Running Hrs', fmtN(run, 2), 'meter-based running hours', '#1d9e75'],
+          ['R&M Cost', crore(cost), 'excl. fuel & coal codes', '#d8504c'],
+          ['Cost / Hr', '\u20b9' + fmtN(run ? cost / run : 0, 2), 'repair cost per running hour', '#e08a1e'],
+          ['HSD Issued', fmtN(hds, 2) + ' L', 'diesel issued', '#7c5cbf'],
+          ['Utilization', fmtPct(total ? billing / total : 0), 'billing days / total days', '#0891b2'],
+          ['Working Days', fmtN(work), 'days in working status', '#1d9e75'],
+          ['Breakdown Days', fmtN(bd), 'breakdown + maintenance', '#d8504c'],
+          ['Billing Days', fmtN(billing), 'deployed \u2212 breakdown', '#163a5c'],
+          ['Production', fmtN(sum(view, 'production'), 2), 'FTM (cum)', '#8a98a4']
+        ];
+      }
+
+      function charts(view) {
+        const opts = g => ({ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, ...g });
+        const PIE = ['#2f6db0', '#1d9e75', '#e08a1e', '#7c5cbf', '#0891b2', '#d8504c', '#163a5c', '#4c9f70', '#c2708f', '#8a98a4'];
+        const grp = (key, val) => {
+          const m = new Map();
+          view.forEach(r => {
+            const u = upk(r[key]) || '\u2014';
+            let o = m.get(u); if (!o) { o = { lab: (String(r[key] || '').trim() || '\u2014'), v: 0, n: 0 }; m.set(u, o); }
+            o.v += (+r[val] || 0); o.n++;
+          });
+          return [...m.values()];
+        };
+        const crTick = { ticks: { callback: v => fmtN(v / 1e7, 2) + ' Cr' } };
+        const pieOf = (title, sub, key, val, fmt) => ({
+          title, sub, height: 310, legend: true, render(cv) {
+            const e = grp(key, val).filter(x => x.v > 0).sort((a, b) => b.v - a.v);
+            const top = e.slice(0, 9), rest = e.slice(9);
+            if (rest.length) top.push({ lab: 'Others (' + rest.length + ')', v: rest.reduce((s, x) => s + x.v, 0) });
+            const tot = top.reduce((s, x) => s + x.v, 0) || 1;
+            cv._legend = top.map((x, i) => `<span><i style="background:${PIE[i % PIE.length]}"></i>${x.lab} ${fmtPct(x.v / tot)}</span>`).join('');
+            return new Chart(cv, {
+              type: 'pie', data: { labels: top.map(x => x.lab), datasets: [{ data: top.map(x => +x.v.toFixed(2)), backgroundColor: top.map((x, i) => PIE[i % PIE.length]), borderWidth: 2, borderColor: '#fff' }] },
+              options: opts({ plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => c.label + ': ' + (fmt ? fmt(c.parsed) : fmtN(c.parsed, 2)) + ' (' + fmtPct(c.parsed / tot) + ')' } } } })
+            });
+          }
+        });
+        return [
+          {
+            title: 'Day-status split', sub: 'how machine days were spent', height: 310, legend: true, render(cv) {
+              const labs = ['Working', 'Idle', 'Breakdown & Maint.', 'Free Asset', 'Transit'];
+              const vals = [sum(view, 'working'), sum(view, 'idle'), sum(view, 'bdMaint'), sum(view, 'freeAsset'), sum(view, 'transit')];
+              const cols = ['#1d9e75', '#e08a1e', '#d8504c', '#8a98a4', '#7c5cbf'];
+              const tot = vals.reduce((a, b) => a + b, 0) || 1;
+              cv._legend = labs.map((l, i) => `<span><i style="background:${cols[i]}"></i>${l} ${fmtPct(vals[i] / tot)}</span>`).join('');
+              return new Chart(cv, { type: 'doughnut', data: { labels: labs, datasets: [{ data: vals, backgroundColor: cols, borderWidth: 2, borderColor: '#fff' }] }, options: opts({ cutout: '58%', plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => c.label + ': ' + fmtN(c.parsed) + ' days (' + fmtPct(c.parsed / tot) + ')' } } } }) });
+            }
+          },
+          pieOf('R&M cost by fleet type', '\u20b9 share of repair cost', 'fleet', 'cost', v => crore(v)),
+          pieOf('Running hours by fleet type', 'share of meter hours', 'fleet', 'running'),
+          pieOf('R&M cost by make', 'top 9 manufacturers + others', 'make', 'cost', v => crore(v)),
+          {
+            title: 'Top 12 fleet types by R&M cost', sub: '\u20b9 repair & maintenance', height: 350, render(cv) {
+              const e = grp('fleet', 'cost').sort((a, b) => b.v - a.v).slice(0, 12);
+              return new Chart(cv, { type: 'bar', data: { labels: e.map(x => x.lab), datasets: [{ data: e.map(x => Math.round(x.v)), backgroundColor: '#d8504c', borderRadius: 4 }] }, options: opts({ indexAxis: 'y', scales: { x: crTick, y: { ticks: { font: { size: 9.5 } } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => crore(c.parsed.x) } } } }) });
+            }
+          },
+          {
+            title: 'Utilization by fleet type', sub: 'billing days \u00f7 total days', height: 350, render(cv) {
+              const m = new Map();
+              view.forEach(r => { const u = upk(r.fleet) || '\u2014'; let o = m.get(u); if (!o) { o = { lab: (String(r.fleet || '').trim() || '\u2014'), b: 0, t: 0 }; m.set(u, o); } o.b += r.billingDays; o.t += r.totalDays; });
+              const e = [...m.values()].map(x => ({ lab: x.lab, u: x.t ? x.b / x.t : 0, t: x.t })).filter(x => x.t > 0).sort((a, b) => b.u - a.u).slice(0, 12);
+              return new Chart(cv, { type: 'bar', data: { labels: e.map(x => x.lab), datasets: [{ data: e.map(x => +(x.u * 100).toFixed(1)), backgroundColor: '#1d9e75', borderRadius: 4 }] }, options: opts({ indexAxis: 'y', scales: { x: { ticks: { callback: v => v + '%' }, max: 100 }, y: { ticks: { font: { size: 9.5 } } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => c.parsed.x + '% utilization' } } } }) });
+            }
+          },
+          {
+            title: 'Top 12 machines by R&M cost', sub: 'highest spend equipment', height: 350, render(cv) {
+              const e = view.slice().sort((a, b) => b.cost - a.cost).slice(0, 12);
+              return new Chart(cv, { type: 'bar', data: { labels: e.map(x => x.eqp), datasets: [{ data: e.map(x => Math.round(x.cost)), backgroundColor: '#163a5c', borderRadius: 4 }] }, options: opts({ indexAxis: 'y', scales: { x: crTick, y: { ticks: { font: { size: 10 } } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => crore(c.parsed.x) } } } }) });
+            }
+          },
+          {
+            title: 'Cost per hour vs running hours', sub: 'each point is a machine', height: 330, render(cv) {
+              const pts = view.filter(r => r.running > 0 && r.perHourCost > 0)
+                .map(r => ({ x: +r.running.toFixed(2), y: +r.perHourCost.toFixed(2), lab: r.eqp }));
+              return new Chart(cv, { type: 'scatter', data: { datasets: [{ data: pts, backgroundColor: 'rgba(47,109,176,.62)', pointRadius: 4 }] }, options: opts({ scales: { x: { title: { display: true, text: 'Running hrs' } }, y: { title: { display: true, text: '\u20b9 / hr' }, ticks: { callback: v => fmtN(v) } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => c.raw.lab + ': ' + fmtN(c.raw.x, 1) + ' hrs, \u20b9' + fmtN(c.raw.y, 2) + '/hr' } } } }) });
+            }
+          }
+        ];
+      }
+
+      const columns = [
+        { key: '_sr', label: 'SL NO', type: 'sr' },
+        { key: 'eqp', label: 'Equipment Code', type: 'text' }, { key: 'desc', label: 'Equipment Description', type: 'text' },
+        { key: 'fleet', label: 'Fleet Type', type: 'text' }, { key: 'make', label: 'Make', type: 'text' },
+        { key: 'model', label: 'Model', type: 'text' }, { key: 'yom', label: 'YOM', type: 'text' },
+        { key: 'client', label: 'Client Name', type: 'text' }, { key: 'siteCode', label: 'Site Code', type: 'text' },
+        { key: 'state', label: 'Location-State', type: 'text' }, { key: 'workingStatus', label: 'Working Status', type: 'text' },
+        { key: 'allotted', label: 'Allotted To', type: 'text' },
+        { key: 'startDate', label: 'Start Date', type: 'date' }, { key: 'endDate', label: 'End Date', type: 'date' },
+        { key: 'startHmr', label: 'Starting HMR', type: 'num2' }, { key: 'closeHmr', label: 'Closing HMR', type: 'num2' },
+        { key: 'running', label: 'Running Hrs', type: 'num2' }, { key: 'hds', label: 'HDS Issue', type: 'num2' },
+        { key: 'production', label: 'Production FTM (CUM)', type: 'num2' }, { key: 'productivity', label: 'Productivity (CUM/Hr)', type: 'num2' },
+        { key: 'totalDays', label: 'Total Days', type: 'int' }, { key: 'deployedDays', label: 'Deployed Days', type: 'int' },
+        { key: 'working', label: 'Working', type: 'int' }, { key: 'bdMaint', label: 'Breakdown & Maintenance', type: 'int' },
+        { key: 'idle', label: 'Idle', type: 'int' }, { key: 'freeAsset', label: 'Free Asset', type: 'int' },
+        { key: 'transit', label: 'Transit', type: 'int' }, { key: 'billingDays', label: 'Billing Days', type: 'int' },
+        { key: 'utilization', label: 'Utilization', type: 'util' },
+        { key: 'cost', label: 'Repair & Maintenance Cost', type: 'num2' }, { key: 'perHourCost', label: 'Per Hour Cost', type: 'num2' },
+        { key: 'logRun', label: 'Log Running Hrs/KM', type: 'num2' }, { key: 'meterVariance', label: 'Meter Variance', type: 'num2' },
+        { key: 'month', label: 'Month', type: 'text' }
+      ];
+      const tableColumns = columns.map(c => ({
+        key: c.key, label: c.label,
+        fmt: c.type === 'sr' ? 'sr' : c.type === 'num2' ? 'num2' : c.type === 'int' ? 'int'
+          : c.type === 'util' ? 'util' : c.type === 'date' ? 'date' : 'text'
+      }));
+      const filters = [
+        { key: 'day', label: 'Deployment date (calendar)', type: 'calendar', from: 'startDate', to: 'endDate' },
+        { key: 'month', label: 'Month', multi: true, sort: 'month' },
+        { key: 'fleet', label: 'Fleet Type', multi: true }, { key: 'make', label: 'Make', multi: true },
+        { key: 'model', label: 'Model', multi: true }, { key: 'client', label: 'Client', multi: true },
+        { key: 'siteCode', label: 'Site Code', multi: true }, { key: 'state', label: 'Location-State', multi: true },
+        { key: 'allotted', label: 'Allotted To', multi: true }, { key: 'workingStatus', label: 'Working Status', multi: true },
+        { key: 'yom', label: 'YOM', multi: true, sort: 'year' }
+      ];
+
+      /* ---------------- Excel export: Summery Report + R2 ---------------- */
+      const NUM2 = '#,##,##0.00', INT0 = '#,##,##0', PCT = '0%';
+      async function exportExcel(fileName) {
+        const data = (typeof VIEW !== 'undefined' && Array.isArray(VIEW)) ? VIEW : RAW;
+        const wb = new ExcelJS.Workbook(); wb.creator = COMPANY.name; wb.created = new Date();
+        const HEAD = 'FF0E2A43', THIN = { style: 'thin', color: { argb: 'FFBFC8D4' } };
+        const bd = { top: THIN, left: THIN, bottom: THIN, right: THIN };
+        const ALT = 'FFF6F9FC', TOTBG = 'FFDCE6F4';
+        const hCell = (c, t) => { c.value = t; c.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10.5, name: 'Calibri' }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEAD } }; c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }; c.border = bd; };
+        const tCell = (c, v, o) => { c.value = v; c.border = bd; c.font = { size: 10.5, name: 'Calibri', bold: !!(o && o.bold) }; c.alignment = { horizontal: 'left' }; if (o && o.fill) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: o.fill } }; };
+        const nCell = (c, v, o) => { c.value = (v === null || v === undefined) ? null : v; c.numFmt = (o && o.fmt) || NUM2; c.border = bd; c.font = { size: 10.5, name: 'Calibri', bold: !!(o && o.bold) }; c.alignment = { horizontal: 'right' }; if (o && o.fill) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: o.fill } }; };
+        const dCell = (c, v, o) => { const d = toDate(v); c.value = (d instanceof Date && !isNaN(d)) ? new Date(d.getTime() - d.getTimezoneOffset() * 60000) : ''; c.numFmt = 'dd-mmm-yyyy'; c.border = bd; c.font = { size: 10.5, name: 'Calibri' }; c.alignment = { horizontal: 'center' }; if (o && o.fill) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: o.fill } }; };
+
+        /* ===== 1. Summery Report (one row per machine, reference column order) ===== */
+        const ws1 = wb.addWorksheet('Summery Report ', { views: [{ state: 'frozen', xSplit: 2, ySplit: 1 }] });
+        const H1 = ['SL NO', 'Equipment Code', 'Equipment Description', 'FLEET TYEP', 'MAKE', 'MODEL', 'YOM',
+          'CLIENT NAME', 'SITECODE', 'LOCATION-STATE', 'WORKING STATUS (H/DH/INT)', 'ALLOTTED TO',
+          'START DATE', ' END DATE', 'STARTING HMR', 'CLOSING HMR', 'RUNNING HRS.', 'HDS ISSUE',
+          'PRODUCTION FTM (CUM)', 'PRODUCTIVITY (CUM/HR)', 'PRODUCTION FTM (RMTR)', 'PRODUCTIVITY (RMTR/HR)',
+          'TOTAL DAYS', 'DEPLOYED DAYS', 'Working', 'Breakdown & Maintenance', 'Idle', 'Free Asset', 'Transit',
+          'BILLING DAYS DAYS', 'UTILIZATION', 'Repair & Mainatcne Cost (Exculding Fuel & Coal)', 'PER HOUR COST',
+          'LOG RUNNING HRS/KM (SUM)', 'METER VARIANCE (P - AF)'];
+        H1.forEach((t, i) => hCell(ws1.getRow(1).getCell(i + 1), t));
+        data.forEach((r, i) => {
+          const row = ws1.getRow(i + 2), fill = i % 2 ? ALT : null;
+          nCell(row.getCell(1), i + 1, { fill, fmt: INT0 });
+          [r.eqp, r.desc, r.fleet, r.make, r.model, r.yom, r.client, r.siteCode, r.state, r.workingStatus, r.allotted]
+            .forEach((v, j) => tCell(row.getCell(2 + j), v, { fill }));
+          dCell(row.getCell(13), r.startDate, { fill }); dCell(row.getCell(14), r.endDate, { fill });
+          [r.startHmr, r.closeHmr, r.running, r.hds, r.production, r.productivity].forEach((v, j) => nCell(row.getCell(15 + j), v, { fill }));
+          tCell(row.getCell(21), '', { fill });                    // PRODUCTION FTM (RMTR) — blank in the reference
+          nCell(row.getCell(22), 0, { fill });                     // PRODUCTIVITY (RMTR/HR)
+          [r.totalDays, r.deployedDays, r.working, r.bdMaint, r.idle, r.freeAsset, r.transit, r.billingDays]
+            .forEach((v, j) => nCell(row.getCell(23 + j), v, { fill, fmt: INT0 }));
+          nCell(row.getCell(31), r.utilization, { fill, fmt: PCT });
+          nCell(row.getCell(32), r.cost, { fill }); nCell(row.getCell(33), r.perHourCost, { fill });
+          nCell(row.getCell(34), r.logRun, { fill }); nCell(row.getCell(35), r.meterVariance, { fill });
+        });
+        {
+          const r = ws1.getRow(data.length + 2);
+          tCell(r.getCell(1), '', { bold: true, fill: TOTBG }); tCell(r.getCell(2), 'TOTAL / AVERAGE', { bold: true, fill: TOTBG });
+          for (let c = 3; c <= 16; c++) tCell(r.getCell(c), '', { bold: true, fill: TOTBG });
+          const S = k => data.reduce((s, x) => s + (+x[k] || 0), 0);
+          const run = S('running'), prod = S('production'), tot = S('totalDays'), bill = S('billingDays'), cost = S('cost');
+          nCell(r.getCell(17), run, { bold: true, fill: TOTBG }); nCell(r.getCell(18), S('hds'), { bold: true, fill: TOTBG });
+          nCell(r.getCell(19), prod, { bold: true, fill: TOTBG }); nCell(r.getCell(20), run ? prod / run : 0, { bold: true, fill: TOTBG });
+          tCell(r.getCell(21), '', { bold: true, fill: TOTBG }); nCell(r.getCell(22), 0, { bold: true, fill: TOTBG });
+          [tot, S('deployedDays'), S('working'), S('bdMaint'), S('idle'), S('freeAsset'), S('transit'), bill]
+            .forEach((v, j) => nCell(r.getCell(23 + j), v, { bold: true, fill: TOTBG, fmt: INT0 }));
+          nCell(r.getCell(31), tot ? bill / tot : 0, { bold: true, fill: TOTBG, fmt: PCT });
+          nCell(r.getCell(32), cost, { bold: true, fill: TOTBG }); nCell(r.getCell(33), run ? cost / run : 0, { bold: true, fill: TOTBG });
+          nCell(r.getCell(34), S('logRun'), { bold: true, fill: TOTBG }); nCell(r.getCell(35), S('meterVariance'), { bold: true, fill: TOTBG });
+        }
+        // the fuel/coal codes excluded from R&M cost, recorded beside the data as in the reference
+        { const c = ws1.getRow(1).getCell(37); hCell(c, 'EXCLUDED MATERIAL CODES (fuel etc.)'); hCell(ws1.getRow(1).getCell(38), 'DESCRIPTION'); }
+        EXCLUDED_DESCR.forEach((e, i) => { const r = ws1.getRow(2 + i); tCell(r.getCell(37), e.code); tCell(r.getCell(38), e.desc); });
+        ws1.getColumn(1).width = 7; ws1.getColumn(2).width = 15; ws1.getColumn(3).width = 42;
+        for (let c = 4; c <= 12; c++) ws1.getColumn(c).width = 20;
+        for (let c = 13; c <= 35; c++) ws1.getColumn(c).width = 15;
+        ws1.getColumn(37).width = 30; ws1.getColumn(38).width = 30;
+        ws1.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: 35 } };
+
+        /* ===== 2. R2 — pivot by Fleet / Make / Model ===== */
+        const ws2 = wb.addWorksheet('R2', { views: [{ state: 'frozen', ySplit: 3 }] });
+        const H2 = ['FLEET TYEP', 'MAKE', 'MODEL', 'Count of Equipment Code', 'Sum of RUNNING HRS.',
+          'Sum of HDS ISSUE', 'Sum of PRODUCTION FTM (CUM)', 'Sum of TOTAL DAYS', 'Sum of DEPLOYED DAYS',
+          'Sum of Working', 'Sum of Breakdown & Maintenance', 'Sum of Idle', 'Sum of Free Asset',
+          'Sum of Transit', 'Sum of BILLING DAYS DAYS', 'Sum of Repair & Mainatcne Cost', 'Cost / Hrs'];
+        H2.forEach((t, i) => hCell(ws2.getRow(3).getCell(i + 1), t));
+        // Case-insensitive grouping. Excel's pivot keeps ONE item cache per field, so
+        // the casing shown is the first seen for that field ANYWHERE in the column,
+        // not the first seen within the group (e.g. "Tata" wins over "TATA").
+        const dispOf = key => { const m = new Map(); data.forEach(r => { const u = upk(r[key]); if (!m.has(u)) m.set(u, String(r[key] || '').trim()); }); return m; };
+        const dFleet = dispOf('fleet'), dMake = dispOf('make'), dModel = dispOf('model');
+        const pm = new Map();
+        data.forEach(r => {
+          const k = upk(r.fleet) + '\u00A6' + upk(r.make) + '\u00A6' + upk(r.model);
+          let g = pm.get(k);
+          if (!g) {
+            g = {
+              fleet: dFleet.get(upk(r.fleet)), make: dMake.get(upk(r.make)), model: dModel.get(upk(r.model)),
+              kf: upk(r.fleet), km: upk(r.make), ko: upk(r.model),
+              n: 0, running: 0, hds: 0, production: 0, totalDays: 0, deployedDays: 0,
+              working: 0, bdMaint: 0, idle: 0, freeAsset: 0, transit: 0, billingDays: 0, cost: 0
+            };
+            pm.set(k, g);
+          }
+          g.n++; g.running += r.running; g.hds += r.hds; g.production += r.production;
+          g.totalDays += r.totalDays; g.deployedDays += r.deployedDays; g.working += r.working;
+          g.bdMaint += r.bdMaint; g.idle += r.idle; g.freeAsset += r.freeAsset;
+          g.transit += r.transit; g.billingDays += r.billingDays; g.cost += r.cost;
+        });
+        const piv = [...pm.values()].sort((a, b) => xlCmp(a.fleet, b.fleet) || xlCmp(a.make, b.make) || xlCmp(a.model, b.model));
+        let r2 = 4;
+        piv.forEach((g, i) => {
+          const row = ws2.getRow(r2), fill = i % 2 ? ALT : null;
+          tCell(row.getCell(1), g.fleet, { fill }); tCell(row.getCell(2), g.make, { fill }); tCell(row.getCell(3), g.model, { fill });
+          nCell(row.getCell(4), g.n, { fill, fmt: INT0 });
+          [g.running, g.hds, g.production].forEach((v, j) => nCell(row.getCell(5 + j), v, { fill }));
+          [g.totalDays, g.deployedDays, g.working, g.bdMaint, g.idle, g.freeAsset, g.transit, g.billingDays]
+            .forEach((v, j) => nCell(row.getCell(8 + j), v, { fill, fmt: INT0 }));
+          nCell(row.getCell(16), g.cost, { fill });
+          nCell(row.getCell(17), g.running ? g.cost / g.running : 0, { fill });   // =IFERROR(P/E,0)
+          r2++;
+        });
+        {
+          const row = ws2.getRow(r2); const S = k => data.reduce((s, x) => s + (+x[k] || 0), 0);
+          tCell(row.getCell(1), 'Grand Total', { bold: true, fill: TOTBG });
+          tCell(row.getCell(2), '', { bold: true, fill: TOTBG }); tCell(row.getCell(3), '', { bold: true, fill: TOTBG });
+          nCell(row.getCell(4), data.length, { bold: true, fill: TOTBG, fmt: INT0 });
+          const run = S('running'), cost = S('cost');
+          [run, S('hds'), S('production')].forEach((v, j) => nCell(row.getCell(5 + j), v, { bold: true, fill: TOTBG }));
+          [S('totalDays'), S('deployedDays'), S('working'), S('bdMaint'), S('idle'), S('freeAsset'), S('transit'), S('billingDays')]
+            .forEach((v, j) => nCell(row.getCell(8 + j), v, { bold: true, fill: TOTBG, fmt: INT0 }));
+          nCell(row.getCell(16), cost, { bold: true, fill: TOTBG });
+          nCell(row.getCell(17), run ? cost / run : 0, { bold: true, fill: TOTBG });
+        }
+        ws2.getColumn(1).width = 24; ws2.getColumn(2).width = 18; ws2.getColumn(3).width = 26;
+        for (let c = 4; c <= 17; c++) ws2.getColumn(c).width = 15;
+
+        const buf = await wb.xlsx.writeBuffer();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+        a.download = fileName; a.click();
+      }
+
+      return {
+        meta: {
+          name: 'P&M Monthly Report',
+          tagline: 'Machine-wise utilisation, running hours & repair cost \u2014 from the shift log and spares issues',
+          icon: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/><path d="M8 14h3M8 17h6"/></svg>'
+        },
+        hint: 'Upload the monthly workbook containing the <b>Log Entry</b> sheet (one row per machine per day) and the <b>Master sheet</b> of spare-part issues. Running hours come from the HMR meter (closing \u2212 starting), and R&amp;M cost excludes the fuel/coal codes F00001, F00002 and V12750. The Excel export rebuilds the <b>Summery Report</b> and the <b>R2</b> fleet/make/model pivot.',
+        sheetName: 'P&M Monthly', exportName: 'VisionInfra-PM-Monthly-Report',
+        process, kpis, charts, columns, tableColumns, filters, cascadeFilters: true,
+        searchKeys: ['eqp', 'desc', 'fleet', 'make', 'model', 'client', 'siteCode', 'state', 'allotted', 'workingStatus'],
         exportExcel
       };
     })();
