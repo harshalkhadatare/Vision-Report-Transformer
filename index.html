@@ -7488,6 +7488,22 @@
           const f = fieldByIdx[idx]; if (!f) return;
           MASTER_COLS.push({ key: f, header: String(h), idx: idx, num: !!NUMF[f], date: !!DATEF[f] });
         });
+        // ---- Division column: =MID(CPC,3,3) ----------------------------------
+        // Division is DERIVED from characters 3-5 of the CPC code and must sit
+        // between CPC and Post Flag on the exported Master Sheet. If the ERP dump
+        // already carries a Division column we keep its position but still write
+        // the derived value (verified identical on the reference workbook); if the
+        // dump has no Division column at all, one is inserted right after CPC so
+        // the export always shows it.
+        {
+          const dv = MASTER_COLS.find(c => c.key === 'division');
+          if (dv) { dv.synth = true; dv.header = dv.header || 'Division'; }
+          else {
+            const at = MASTER_COLS.findIndex(c => c.key === 'cpc');
+            const entry = { key: 'division', header: 'Division', idx: null, synth: true, num: false, date: false };
+            if (at >= 0) MASTER_COLS.splice(at + 1, 0, entry); else MASTER_COLS.push(entry);
+          }
+        }
         const masterIdx = MASTER_COLS.map(c => c.idx);
         const S = (r, i) => i == null ? '' : String(r[i] == null ? '' : r[i]).trim();
 
@@ -7501,6 +7517,10 @@
           if (!soNo) continue;
           const amt = numv(r[m.amount]), oih = numv(r[m.orderInHand]);
           const d = m.soDate != null ? toDate(r[m.soDate]) : null;
+          // Division = MID(CPC,3,3), i.e. characters 3-5 of the CPC code.
+          // Falls back to the dump's own Division cell when CPC is missing/short.
+          const cpcv = S(r, m.cpc);
+          const division = cpcv.length >= 3 ? cpcv.substr(2, 3) : S(r, m.division);
           rows.push({
             soNo: soNo, soDate: d, soMonth: mLabel(d),
             party: S(r, m.party), vendor: S(r, m.vendor), pwo: S(r, m.pwo),
@@ -7508,8 +7528,8 @@
             uom: S(r, m.uom), qty: numv(r[m.qty]), rate: numv(r[m.rate]),
             amount: amt, pendQty: numv(r[m.pendQty]), orderInHand: oih,
             executed: amt - oih,                                  // =B5-B6 in the reference
-            itemClassCode: S(r, m.itemClassCode), cpc: S(r, m.cpc),
-            division: S(r, m.division), postFlag: S(r, m.postFlag) || '\u2014',
+            itemClassCode: S(r, m.itemClassCode), cpc: cpcv,
+            division: division, postFlag: S(r, m.postFlag) || '\u2014',
             status: S(r, m.status), itemClass: S(r, m.itemClass),
             subClass: S(r, m.subClass), department: S(r, m.department),
             otherDetails: S(r, m.otherDetails),
@@ -7664,7 +7684,9 @@
         for (let ri = 0; ri < data.length; ri++) {
           const r = data[ri], row = wsM.getRow(ri + 2), rm = (r._m && r._m.length === mcols.length) ? r._m : null;
           for (let i = 0; i < mcols.length; i++) {
-            const c = mcols[i], v = rm ? rm[i] : r[c.key], cell = row.getCell(i + 1);
+            const c = mcols[i], cell = row.getCell(i + 1);
+            // synth columns (Division) are computed, not echoed from the upload
+            const v = c.synth ? r[c.key] : (rm ? rm[i] : r[c.key]);
             if (c.num) cell.value = (v === '' || v == null) ? null : (+v || 0);
             else if (c.date) { const dt = toDate(v); cell.value = (dt instanceof Date && !isNaN(dt)) ? new Date(dt.getTime() - dt.getTimezoneOffset() * 60000) : (v == null ? '' : v); }
             else cell.value = (v == null ? '' : v);
