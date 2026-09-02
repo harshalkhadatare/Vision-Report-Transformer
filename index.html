@@ -7852,6 +7852,10 @@
       const EXCLUDED_MATERIALS = ['F00001', 'F00002', 'V12750'];
       const BD_STATUSES = ['BREAKDOWN', 'MAINTENANCE'];
       let SUMMARY = [], EXCLUDED_DESCR = [];
+      // Verbatim copies of the two source sheets so the export can carry them through
+      // exactly as uploaded (name, header text, column order and cell values).
+      let LOG_SHEET = { name: 'Log Entry', headers: [], rows: [], eqIdx: -1 };
+      let MAT_SHEET = { name: 'Master sheet', headers: [], rows: [], eqIdx: -1 };
       const upk = v => String(v == null ? '' : v).trim().toUpperCase();
       const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
       const mLabel = d => (d instanceof Date && !isNaN(d)) ? MON[d.getMonth()] + '-' + d.getFullYear() : '\u2014';
@@ -7904,9 +7908,11 @@
         const exclSet = new Set(EXCLUDED_MATERIALS.map(x => x.toUpperCase()));
         const exclDescr = new Map();
         if (hasMat && mm.eqp != null) {
+          MAT_SHEET = { name: M.name || 'Master sheet', headers: mh.slice(), rows: [], eqIdx: mm.eqp };
           for (let i = mhi + 1; i < M.aoa.length; i++) {
             const r = M.aoa[i]; if (!r || !r.length) continue;
             const eq = String(r[mm.eqp] == null ? '' : r[mm.eqp]).trim(); if (!eq) continue;
+            MAT_SHEET.rows.push(r);
             const code = String(mm.materialNo != null ? (r[mm.materialNo] == null ? '' : r[mm.materialNo]) : '').trim();
             const amt = numv(r[mm.issuedAmount]);
             const isExcluded = exclSet.has(code.toUpperCase());
@@ -7933,9 +7939,11 @@
 
         // ---------- pass 2: walk the log once, aggregating per equipment ----------
         const eqMap = new Map(); const order = [];
+        LOG_SHEET = { name: L.name || 'Log Entry', headers: lh.slice(), rows: [], eqIdx: lm.eqp };
         for (let i = lhi + 1; i < L.aoa.length; i++) {
           const r = L.aoa[i]; if (!r || !r.length) continue;
           const eq = String(r[lm.eqp] == null ? '' : r[lm.eqp]).trim(); if (!eq) continue;
+          LOG_SHEET.rows.push(r);
           const k = upk(eq);
           let g = eqMap.get(k);
           if (!g) {
@@ -8154,7 +8162,11 @@
         const nCell = (c, v, o) => { c.value = (v === null || v === undefined) ? null : v; c.numFmt = (o && o.fmt) || NUM2; c.border = bd; c.font = { size: 10.5, name: 'Calibri', bold: !!(o && o.bold) }; c.alignment = { horizontal: 'right' }; if (o && o.fill) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: o.fill } }; };
         const dCell = (c, v, o) => { const d = toDate(v); c.value = (d instanceof Date && !isNaN(d)) ? new Date(d.getTime() - d.getTimezoneOffset() * 60000) : ''; c.numFmt = 'dd-mmm-yyyy'; c.border = bd; c.font = { size: 10.5, name: 'Calibri' }; c.alignment = { horizontal: 'center' }; if (o && o.fill) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: o.fill } }; };
 
-        /* ===== 1. Summery Report (one row per machine, reference column order) ===== */
+        // Tabs are created in the reference workbook's order: R2, Summery Report,
+        // Log Entry, Master sheet (ExcelJS orders sheets by creation).
+        const ws2 = wb.addWorksheet('R2', { views: [{ state: 'frozen', ySplit: 3 }] });
+
+        /* ===== Summery Report (one row per machine, reference column order) ===== */
         const ws1 = wb.addWorksheet('Summery Report ', { views: [{ state: 'frozen', xSplit: 2, ySplit: 1 }] });
         const H1 = ['SL NO', 'Equipment Code', 'Equipment Description', 'FLEET TYEP', 'MAKE', 'MODEL', 'YOM',
           'CLIENT NAME', 'SITECODE', 'LOCATION-STATE', 'WORKING STATUS (H/DH/INT)', 'ALLOTTED TO',
@@ -8203,8 +8215,7 @@
         ws1.getColumn(37).width = 30; ws1.getColumn(38).width = 30;
         ws1.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: 35 } };
 
-        /* ===== 2. R2 — pivot by Fleet / Make / Model ===== */
-        const ws2 = wb.addWorksheet('R2', { views: [{ state: 'frozen', ySplit: 3 }] });
+        /* ===== R2 — pivot by Fleet / Make / Model (worksheet created above) ===== */
         const H2 = ['FLEET TYEP', 'MAKE', 'MODEL', 'Count of Equipment Code', 'Sum of RUNNING HRS.',
           'Sum of HDS ISSUE', 'Sum of PRODUCTION FTM (CUM)', 'Sum of TOTAL DAYS', 'Sum of DEPLOYED DAYS',
           'Sum of Working', 'Sum of Breakdown & Maintenance', 'Sum of Idle', 'Sum of Free Asset',
@@ -8260,6 +8271,58 @@
         }
         ws2.getColumn(1).width = 24; ws2.getColumn(2).width = 18; ws2.getColumn(3).width = 26;
         for (let c = 4; c <= 17; c++) ws2.getColumn(c).width = 15;
+
+        /* ===== 3 & 4. The two SOURCE sheets, carried through verbatim =====
+           Written with addRows (bulk) rather than cell-by-cell styling: these are
+           large sheets (the log alone can be ~15k x 63) and per-cell formatting
+           would make the download crawl. Only the header row is styled; dates and
+           times get a column format, everything else is echoed as uploaded.
+           When the dashboard is filtered, the source rows are narrowed to the
+           machines still in view so every tab tells the same story. */
+        const inView = new Set(data.map(r => upk(r.eqp)));
+        const allEq = inView.size === (SUMMARY ? SUMMARY.length : inView.size);
+        const DATE_H = /(^|_)date($|_)|docdate|datestmp|date_stmp/i;
+        const TIME_H = /time|shift_hrs|shifthrs/i;
+        const MONEY_H = /(amount|rate|cost|value)/i;
+        function writeRawSheet(src) {
+          if (!src || !src.headers.length) return;
+          const ws = wb.addWorksheet(src.name, { views: [{ state: 'frozen', ySplit: 1 }] });
+          const H = src.headers, n = H.length;
+          const hr = ws.getRow(1); H.forEach((h, i) => hCell(hr.getCell(i + 1), h)); hr.commit && hr.commit();
+          // Clock/duration columns are stored as a fraction of a day, not a date:
+          // a full 12h shift is 0.5 and a 24h shift is 1.0. Writing those as dates
+          // would render "24:00:00" as "00:00:00", so they are written numerically
+          // and shown with an elapsed-hours format.
+          const timeCol = []; for (let c = 0; c < n; c++) timeCol[c] = TIME_H.test(String(H[c] || '')) && !DATE_H.test(String(H[c] || ''));
+          const EPOCH = new Date(1899, 11, 30).getTime();
+          const out = [];
+          for (let i = 0; i < src.rows.length; i++) {
+            const r = src.rows[i];
+            if (src.eqIdx >= 0 && !allEq && !inView.has(upk(r[src.eqIdx]))) continue;
+            const row = new Array(n);
+            for (let c = 0; c < n; c++) {
+              let v = r[c];
+              if (v instanceof Date) {
+                if (timeCol[c]) v = (v.getTime() - EPOCH) / 86400000;         // day fraction
+                // Excel writes dates in UTC, so compensate or they slip a day back in IST
+                else v = new Date(v.getTime() - v.getTimezoneOffset() * 60000);
+              }
+              row[c] = (v === undefined || v === '') ? null : v;
+            }
+            out.push(row);
+          }
+          if (out.length) ws.addRows(out);
+          for (let c = 0; c < n; c++) {
+            const h = String(H[c] || ''), col = ws.getColumn(c + 1);
+            col.width = Math.min(Math.max(h.length + 2, 11), 30);
+            if (timeCol[c]) col.numFmt = '[h]:mm:ss';
+            else if (DATE_H.test(h)) col.numFmt = 'dd-mmm-yyyy';
+            else if (MONEY_H.test(h)) col.numFmt = NUM2;
+          }
+          ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: n } };
+        }
+        writeRawSheet(LOG_SHEET);
+        writeRawSheet(MAT_SHEET);
 
         const buf = await wb.xlsx.writeBuffer();
         const a = document.createElement('a');
