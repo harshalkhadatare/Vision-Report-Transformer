@@ -1602,3 +1602,93 @@ revoke all on table public.password_otp from anon, authenticated;
 -- Ask PostgREST to reload its schema cache so the new functions are visible
 -- immediately instead of after the next restart.
 notify pgrst, 'reload schema';
+
+-- ============================================================================
+-- SESSION TIMEOUT  —  1-hour idle expiry (sliding)
+--
+--   Until now a session token never expired: whoami accepted any stored token,
+--   so a browser that logged in days ago was still signed in. A session now dies
+--   after 60 minutes of INACTIVITY — every successful whoami slides the window
+--   forward, so someone actively working is never interrupted, while someone who
+--   walks away (or comes back tomorrow) has to sign in again.
+--
+--   Existing sessions have no expiry stamp, so they fall back to last_login + 1h,
+--   which correctly signs out anyone already idle when this is deployed.
+-- ============================================================================
+
+alter table public.app_users add column if not exists session_expires timestamptz;
+
+-- login starts a fresh 60-minute window
+create or replace function public.login_user(p_user_id text, p_password text)
+returns json language plpgsql security definer set search_path = public, extensions as $$
+declare v record; v_token uuid;
+begin
+  select * into v from public.app_users where lower(user_id)=lower(trim(p_user_id));
+  if v.id is null then return json_build_object('ok',false,'error','Invalid User ID or password.'); end if;
+  if v.locked_until is not null and v.locked_until > now() then
+    return json_build_object('ok',false,'error','Account locked. Try again after '||to_char(v.locked_until at time zone 'Asia/Kolkata','DD Mon HH24:MI')||' IST.');
+  end if;
+  if v.password_hash is null or v.password_hash <> crypt(p_password, v.password_hash) then
+    update public.app_users set failed_attempts = failed_attempts+1,
+      locked_until = case when failed_attempts+1 >= 5 then now() + interval '15 minutes' else locked_until end
+      where id=v.id;
+    perform public.log_activity(v.user_id,v.name,'login_failed', 'attempt '||(v.failed_attempts+1));
+    return json_build_object('ok',false,'error','Invalid User ID or password.');
+  end if;
+  if v.status='pending'  then return json_build_object('ok',false,'error','Your account is awaiting administrator approval.'); end if;
+  if v.status='rejected' then return json_build_object('ok',false,'error','Your registration was rejected. Please contact an administrator.'); end if;
+  if v.status='disabled' then return json_build_object('ok',false,'error','Your account has been disabled. Please contact an administrator.'); end if;
+  v_token := gen_random_uuid();
+  update public.app_users
+     set session_token=v_token, failed_attempts=0, locked_until=null, last_login=now(),
+         session_expires = now() + interval '60 minutes'
+   where id=v.id;
+  perform public.log_activity(v.user_id,v.name,'login', null);
+  return json_build_object('ok',true,'name',v.name,'user_id',v.user_id,'token',v_token,'role',v.role,
+                           'status',v.status,'dept',v.dept,'report_access',v.report_access,
+                           'email',v.email,'last_login',v.last_login,'created_at',v.created_at,
+                           'session_expires', now() + interval '60 minutes','idle_minutes',60);
+end; $$;
+
+-- whoami enforces the window, then slides it forward
+create or replace function public.whoami(p_token uuid)
+returns json language plpgsql security definer set search_path = public as $$
+declare v record; v_deadline timestamptz;
+begin
+  select * into v from public.app_users where session_token=p_token;
+  if v.id is null then return json_build_object('ok',false,'reason','invalid'); end if;
+  if v.status <> 'approved' then return json_build_object('ok',false,'reason','not_approved'); end if;
+
+  -- sessions created before this feature have no stamp: fall back to last_login
+  v_deadline := coalesce(v.session_expires, v.last_login + interval '60 minutes');
+  if v_deadline is null or v_deadline <= now() then
+    update public.app_users set session_token=null, session_expires=null where id=v.id;
+    perform public.log_activity(v.user_id,v.name,'session_expired','idle timeout');
+    return json_build_object('ok',false,'reason','expired');
+  end if;
+
+  update public.app_users set session_expires = now() + interval '60 minutes' where id=v.id;
+  return json_build_object('ok',true,'name',v.name,'user_id',v.user_id,'role',v.role,'status',v.status,
+                           'dept',v.dept,'report_access',v.report_access,
+                           'email',v.email,'last_login',v.last_login,'created_at',v.created_at,
+                           'session_expires', now() + interval '60 minutes','idle_minutes',60);
+end; $$;
+
+-- called by the browser while the user is active, to keep the window open
+create or replace function public.touch_session(p_token uuid)
+returns json language plpgsql security definer set search_path = public as $$
+declare v record; v_deadline timestamptz;
+begin
+  select * into v from public.app_users where session_token=p_token;
+  if v.id is null or v.status <> 'approved' then return json_build_object('ok',false,'reason','invalid'); end if;
+  v_deadline := coalesce(v.session_expires, v.last_login + interval '60 minutes');
+  if v_deadline is null or v_deadline <= now() then
+    update public.app_users set session_token=null, session_expires=null where id=v.id;
+    return json_build_object('ok',false,'reason','expired');
+  end if;
+  update public.app_users set session_expires = now() + interval '60 minutes' where id=v.id;
+  return json_build_object('ok',true,'session_expires', now() + interval '60 minutes');
+end; $$;
+
+grant execute on function public.touch_session(uuid) to anon, authenticated;
+notify pgrst, 'reload schema';

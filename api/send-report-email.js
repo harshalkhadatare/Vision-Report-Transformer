@@ -46,7 +46,8 @@ const REPORT_NAMES = {
   bin: 'Bin / Equipment Values',
   crusher: 'Crusher Report',
   saleorder: 'Sales Order Status',
-  pmmonthly: 'P&M Monthly Report'
+  pmmonthly: 'P&M Monthly Report',
+  outstanding: 'Outstanding Report'
 };
 
 // Administrator contacts shown at the bottom of every alert.

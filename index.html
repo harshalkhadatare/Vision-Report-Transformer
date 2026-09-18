@@ -3887,7 +3887,7 @@
     const REPORT_CATEGORIES = [
       { id: 'pm', label: 'P&M Reports', icon: '\uD83D\uDCC2', reports: ['rental', 'milling', 'bin', 'crusher', 'pmmonthly'] },
       { id: 'store', label: 'Purchase & Store', icon: '\uD83D\uDCC2', reports: ['stock', 'pogin', 'ageing'] },
-      { id: 'sales', label: 'Sales', icon: '\uD83D\uDCC2', reports: ['sales', 'saleorder'] }
+      { id: 'sales', label: 'Sales', icon: '\uD83D\uDCC2', reports: ['sales', 'saleorder', 'outstanding'] }
     ];
     const SN_OPEN_KEY = 'vi_nav_open';
     const LOCK_TIP = "You don't have permission to access this report. Please contact your administrator.";
@@ -4143,6 +4143,51 @@
     }
 
     const SESSION_KEY = 'vi_user'; let USER = null;
+    /* ---- 1-hour idle session ----
+       The server is the authority (whoami/touch_session enforce and slide a
+       60-minute window), but the browser also tracks the last activity so a
+       returning user is signed out immediately, without waiting on a round trip
+       or staying "logged in" while offline. Any real interaction slides both. */
+    const IDLE_MS = 60 * 60 * 1000, IDLE_KEY = 'vi_last_seen';
+    function markSeen() { try { localStorage.setItem(IDLE_KEY, String(Date.now())); } catch (e) { } }
+    function idleExpired() {
+      try {
+        const t = +localStorage.getItem(IDLE_KEY) || 0;
+        return t > 0 && (Date.now() - t) > IDLE_MS;
+      } catch (e) { return false; }
+    }
+    let _idleTimer = null, _touchAt = 0;
+    function endSession(msg) {
+      if (_idleTimer) { clearInterval(_idleTimer); _idleTimer = null; }
+      const tok = USER && USER.token;
+      setSession(null);
+      try { localStorage.removeItem(IDLE_KEY); } catch (e) { }
+      if (tok && SB) { try { SB.rpc('logout_user', { p_token: tok }); } catch (e) { } }
+      showAuth();
+      authMsg(msg || 'Your session has expired after 60 minutes of inactivity. Please sign in again.', 'err');
+    }
+    function startIdleWatch() {
+      markSeen();
+      if (_idleTimer) clearInterval(_idleTimer);
+      // check every 30s; tell the server we are alive at most once a minute
+      _idleTimer = setInterval(async () => {
+        if (!USER) return;
+        if (idleExpired()) { endSession(); return; }
+        if (SB && USER.token && Date.now() - _touchAt > 60000) {
+          _touchAt = Date.now();
+          try {
+            const { data } = await SB.rpc('touch_session', { p_token: USER.token });
+            if (data && data.ok === false) endSession();
+          } catch (e) { }
+        }
+      }, 30000);
+      ['click', 'keydown', 'scroll', 'touchstart'].forEach(ev =>
+        document.addEventListener(ev, () => { if (USER) markSeen(); }, { passive: true, capture: true }));
+      // returning to the tab is the moment a stale session must be caught
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && USER && idleExpired()) endSession();
+      });
+    }
     function getSession() { try { return JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch (e) { return null; } }
     function setSession(u) { USER = u; if (u) localStorage.setItem(SESSION_KEY, JSON.stringify(u)); else localStorage.removeItem(SESSION_KEY); }
     function authMsg(t, cls) { const e = document.getElementById('authMsg'); e.textContent = t || ''; e.className = 'auth-msg' + (t ? (' ' + cls) : ''); }
@@ -4360,11 +4405,13 @@
       const b = document.getElementById('liBtn'); b.disabled = true; b.textContent = 'Signing in…';
       try {
         const { data, error } = await SB.rpc('login_user', { p_user_id: uid, p_password: pass }); if (error) throw error;
-        if (!data.ok) authMsg(data.error, 'err'); else { setSession({ name: data.name, user_id: data.user_id, token: data.token, role: data.role, dept: data.dept, reports: data.report_access }); showApp(); }
+        if (!data.ok) authMsg(data.error, 'err'); else { setSession({ name: data.name, user_id: data.user_id, token: data.token, role: data.role, dept: data.dept, reports: data.report_access }); startIdleWatch(); showApp(); }
       } catch (e) { authMsg('Could not log in: ' + (e.message || e), 'err'); } b.disabled = false; b.textContent = 'Login';
     }
     async function doLogout() {
       try { if (SB && USER && USER.token) await SB.rpc('logout_user', { p_token: USER.token }); } catch (e) { }
+      if (_idleTimer) { clearInterval(_idleTimer); _idleTimer = null; }
+      try { localStorage.removeItem(IDLE_KEY); } catch (e) { }
       setSession(null); reset(); if (typeof Hary !== 'undefined') Hary.reset();
       document.getElementById('selectView').style.display = 'block';
       document.body.classList.remove('in-report');
@@ -4451,9 +4498,26 @@
       if (_shareTok) { initShare(_shareTok); return; }
       USER = getSession();
       if (USER && USER.token && SB) {
+        // a stale tab is caught here before any network call
+        if (idleExpired()) {
+          const tok = USER.token; setSession(null);
+          try { localStorage.removeItem(IDLE_KEY); } catch (e) { }
+          try { SB.rpc('logout_user', { p_token: tok }); } catch (e) { }
+          showAuth(); authMsg('Your session expired after 60 minutes of inactivity. Please sign in again.', 'err');
+          return;
+        }
         try {
           const { data } = await SB.rpc('whoami', { p_token: USER.token });
-          if (data && data.ok) { USER.name = data.name; USER.user_id = data.user_id; USER.role = data.role; USER.dept = data.dept; USER.reports = data.report_access; setSession(USER); showApp(); return; }
+          if (data && data.ok) {
+            USER.name = data.name; USER.user_id = data.user_id; USER.role = data.role; USER.dept = data.dept; USER.reports = data.report_access; setSession(USER);
+            startIdleWatch(); showApp(); return;
+          }
+          // the server may have expired it even if this browser looked active
+          if (data && data.reason === 'expired') {
+            setSession(null); try { localStorage.removeItem(IDLE_KEY); } catch (e) { }
+            showAuth(); authMsg('Your session expired after 60 minutes of inactivity. Please sign in again.', 'err');
+            return;
+          }
         } catch (e) { }
       }
       setSession(null); showAuth();
@@ -8340,6 +8404,516 @@
         sheetName: 'P&M Monthly', exportName: 'VisionInfra-PM-Monthly-Report',
         process, kpis, charts, columns, tableColumns, filters, cascadeFilters: true,
         searchKeys: ['eqp', 'desc', 'fleet', 'make', 'model', 'client', 'siteCode', 'state', 'allotted', 'workingStatus'],
+        exportExcel
+      };
+    })();
+
+
+    /* ===================== OUTSTANDING REPORT ===================== */
+    /* Reverse-engineered from Oustanding_Report.xlsx and validated cell-by-cell:
+       Party Wise (409 ledgers), Party Summary (328 merged parties), every Dashboard
+       block and the R1 pivot all reproduce exactly. Grand total 2,285,309,779.64.
+
+       CHAIN:  Master File -> Party Wise (one row per ledger)
+                           -> Party Summary (ledgers merged by party NAME)
+                           -> Dashboard + R1
+       Formulas lifted verbatim:
+         Debtor Type   = SUBSTITUTE(PARTY TYPE,"Sundry Debtors ","")
+         Name Key      = TRIM(UPPER(PARTY NAME)). Excel's TRIM also collapses
+                         INTERNAL runs of spaces, so "AGARWAL ... PVT  LTD" and
+                         "... PVT LTD" merge into one party — without that the
+                         merge produces 331 parties instead of 328.
+         Outstanding   = OUTSTANDING AMOUNT (col G), not ACTUAL OUTSTANDING
+         Overdue >90 D = 91-180 + 181-270 + 271-365 + >365
+         % Overdue     = IF(out<=0, 0, overdue/out)
+         Oldest Bucket = IFS(>365>0,">365 Days", 271-365>0,..., else "No Dues / Credit")
+         Risk Category = IFS(out<=0,"No Dues", >365>0,"Critical (>1 Yr)",
+                             %overdue>=0.5,"High Risk", overdue>0,"Watch", "Current")
+         Debtor Type (merged) = the single type when every ledger agrees, else "Mixed"
+       Only rows carrying a party code are data: the ERP leaves blank rows and a
+       stray total beneath the last ledger, which the reference's ranges exclude. */
+    REPORTS.outstanding = (function () {
+      const COLS = {
+        partyType: ['partytype'], gl: ['glcode'], partyCode: ['partycode'], partyName: ['partyname'],
+        actual: ['actualoutstanding'], onAccount: ['onaccounts', 'onaccount'], outstanding: ['outstandingamount'],
+        b1: ['030days'], b2: ['3160days'], b3: ['6190days'], b4: ['91180days'],
+        b5: ['181270days'], b6: ['271365days'], b7: ['365days'],
+        pan: ['partypanno', 'panno'], gst: ['partygst', 'gst']
+      };
+      const BUCKETS = [
+        { k: 'b1', label: '0-30 Days', short: '0-30 D' }, { k: 'b2', label: '31-60 Days', short: '31-60 D' },
+        { k: 'b3', label: '61-90 Days', short: '61-90 D' }, { k: 'b4', label: '91-180 Days', short: '91-180 D' },
+        { k: 'b5', label: '181-270 Days', short: '181-270 D' }, { k: 'b6', label: '271-365 Days', short: '271-365 D' },
+        { k: 'b7', label: 'Above 365 Days', short: '>365 D' }
+      ];
+      const RISKS = ['Critical (>1 Yr)', 'High Risk', 'Watch', 'Current', 'No Dues'];
+      const BANDS = [
+        { label: 'Above \u20b9 10 Cr', lo: 1e8, hi: 1e12 }, { label: '\u20b9 5 Cr \u2013 10 Cr', lo: 5e7, hi: 1e8 },
+        { label: '\u20b9 1 Cr \u2013 5 Cr', lo: 1e7, hi: 5e7 }, { label: '\u20b9 25 Lakh \u2013 1 Cr', lo: 2.5e6, hi: 1e7 },
+        { label: '\u20b9 1 Lakh \u2013 25 Lakh', lo: 1e5, hi: 2.5e6 }, { label: 'Up to \u20b9 1 Lakh', lo: 0.01, hi: 1e5 },
+        { label: 'Nil / Credit Balance', lo: -1e12, hi: 0.01 }
+      ];
+      let LEDGERS = [], PARTIES = [];
+      const upk = v => String(v == null ? '' : v).trim().toUpperCase();
+      // Excel TRIM(): trims the ends AND collapses internal runs of whitespace
+      const xlTrim = v => String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
+      const nameKey = v => xlTrim(v).toUpperCase();
+
+      function pickMasterAoa(wb) {
+        const names = wb.SheetNames || [];
+        const name = names.find(n => norm(n) === 'masterfile')
+          || names.find(n => norm(n).includes('master'))
+          || names[names.length - 1] || names[0];
+        return XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: '', raw: true });
+      }
+      const oldestOf = r => {
+        for (let i = BUCKETS.length - 1; i >= 0; i--) if (r[BUCKETS[i].k] > 0)
+          return i === 6 ? '>365 Days' : BUCKETS[i].label;
+        return 'No Dues / Credit';
+      };
+      const riskOf = r => r.outstanding <= 0 ? 'No Dues'
+        : r.b7 > 0 ? 'Critical (>1 Yr)'
+          : r.pctOverdue >= 0.5 ? 'High Risk'
+            : r.overdue90 > 0 ? 'Watch' : 'Current';
+
+      function process(wb) {
+        const aoa = pickMasterAoa(wb); if (!aoa.length) throw new Error('The sheet is empty.');
+        const hi = findHeader(aoa, ['outstandingamount', 'partyname', 'partytype', 'partycode']);
+        const headers = (aoa[hi] || []).map(String); const m = mapCols(headers, COLS);
+        for (const f of ['partyName', 'outstanding'])
+          if (m[f] === undefined)
+            throw new Error('This does not look like an Outstanding dump. Expected columns like '
+              + 'Party Type, Party Code, Party Name, Outstanding Amount and the ageing buckets (missing: ' + f + ').');
+
+        const S = (r, i) => i == null ? '' : String(r[i] == null ? '' : r[i]).trim();
+        // PAN/GST are echoed with their original type: a few are numeric in the ERP
+        // dump and stringifying them would change the Master File echo.
+        const RAWV = (r, i) => i == null ? '' : (typeof r[i] === 'string' ? r[i].trim() : (r[i] == null ? '' : r[i]));
+        const led = [];
+        for (let i = hi + 1; i < aoa.length; i++) {
+          const r = aoa[i]; if (!r || !r.length) continue;
+          const code = S(r, m.partyCode), name = S(r, m.partyName);
+          // a real ledger line always carries a party code AND a name; the ERP's
+          // trailing blanks and its stray grand-total row have neither
+          if (!code || !name) continue;
+          const o = {
+            partyType: S(r, m.partyType), gl: S(r, m.gl), partyCode: code, partyName: name,
+            type: S(r, m.partyType).replace(/Sundry Debtors\s*/i, '').trim(),
+            actual: numv(r[m.actual]), onAccount: numv(r[m.onAccount]), outstanding: numv(r[m.outstanding]),
+            b1: numv(r[m.b1]), b2: numv(r[m.b2]), b3: numv(r[m.b3]), b4: numv(r[m.b4]),
+            b5: numv(r[m.b5]), b6: numv(r[m.b6]), b7: numv(r[m.b7]),
+            pan: RAWV(r, m.pan), gst: RAWV(r, m.gst), nameKey: nameKey(name)
+          };
+          o.overdue90 = o.b4 + o.b5 + o.b6 + o.b7;
+          o.pctOverdue = o.outstanding <= 0 ? 0 : o.overdue90 / o.outstanding;
+          o.oldest = oldestOf(o); o.risk = riskOf(o);
+          led.push(o);
+        }
+        LEDGERS = led;
+
+        // ---- merge ledgers into parties by name key ----
+        const pm = new Map();
+        led.forEach(l => {
+          let p = pm.get(l.nameKey);
+          if (!p) {
+            p = {
+              partyName: l.partyName, nameKey: l.nameKey, ledgers: 0, types: new Set(),
+              firstType: l.type, outstanding: 0, actual: 0, onAccount: 0,
+              b1: 0, b2: 0, b3: 0, b4: 0, b5: 0, b6: 0, b7: 0,
+              pan: l.pan, gst: l.gst, codes: []
+            };
+            pm.set(l.nameKey, p);
+          }
+          p.ledgers++; p.types.add(l.type); p.codes.push(l.partyCode);
+          p.outstanding += l.outstanding; p.actual += l.actual; p.onAccount += l.onAccount;
+          BUCKETS.forEach(b => p[b.k] += l[b.k]);
+          if (!p.pan && l.pan) p.pan = l.pan; if (!p.gst && l.gst) p.gst = l.gst;
+        });
+        const parties = [...pm.values()];
+        const grand = parties.reduce((s, p) => s + p.outstanding, 0);
+        parties.forEach(p => {
+          p.type = p.types.size === 1 ? p.firstType : 'Mixed';       // "Mixed" when ledgers disagree
+          p.overdue90 = p.b4 + p.b5 + p.b6 + p.b7;
+          p.pctOverdue = p.outstanding <= 0 ? 0 : p.overdue90 / p.outstanding;
+          p.oldest = oldestOf(p); p.risk = riskOf(p);
+          p.cr = p.outstanding / 1e7;
+          p.pctTotal = grand ? p.outstanding / grand : 0;
+          const bd = BANDS.find(b => p.outstanding >= b.lo && p.outstanding < b.hi);
+          p.band = bd ? bd.label : 'Nil / Credit Balance';
+          p.codeList = p.codes.join(', ');
+        });
+        // rank by outstanding, descending (the reference's RANK())
+        parties.sort((a, b) => b.outstanding - a.outstanding);
+        parties.forEach((p, i) => p.rank = i + 1);
+        PARTIES = parties;
+        const types = new Set(led.map(l => upk(l.type))).size;
+        return {
+          rows: parties,
+          note: `Read ${fmtN(led.length)} ledgers merged into ${fmtN(parties.length)} parties across ${fmtN(types)} debtor types.`
+        };
+      }
+
+      function kpis(view) {
+        const tot = sum(view, 'outstanding'), ov = sum(view, 'overdue90'), crit = sum(view, 'b7');
+        const withDues = view.filter(p => p.outstanding > 0).length;
+        const ledgers = view.reduce((s, p) => s + p.ledgers, 0);
+        const risky = view.filter(p => p.risk === 'Critical (>1 Yr)').length;
+        return [
+          ['Total Outstanding', crore(tot), 'net receivable', '#2f6db0'],
+          ['Overdue > 90 Days', crore(ov), 'ageing beyond 90 days', '#e08a1e'],
+          ['% Overdue > 90', fmtPct(tot ? ov / tot : 0), 'share of total outstanding', '#d8504c'],
+          ['> 365 Days \u2014 Critical', crore(crit), 'more than a year old', '#d8504c'],
+          ['Parties with Dues', fmtN(withDues), 'positive balance', '#1d9e75'],
+          ['Ledger Accounts', fmtN(ledgers), 'merged into ' + fmtN(view.length) + ' parties', '#7c5cbf'],
+          ['Critical Parties', fmtN(risky), 'carrying > 1 year dues', '#d8504c'],
+          ['Avg per Party', crore(view.length ? tot / view.length : 0), 'mean outstanding', '#0891b2']
+        ];
+      }
+
+      function charts(view) {
+        const opts = g => ({ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, ...g });
+        const PIE = ['#2f6db0', '#1d9e75', '#e08a1e', '#7c5cbf', '#0891b2', '#d8504c', '#163a5c', '#4c9f70', '#c2708f', '#8a98a4'];
+        const crTick = { ticks: { callback: v => fmtN(v / 1e7, 1) + ' Cr' } };
+        const RISK_COL = { 'Critical (>1 Yr)': '#d8504c', 'High Risk': '#e08a1e', 'Watch': '#c2708f', 'Current': '#1d9e75', 'No Dues': '#8a98a4' };
+        const grp = (key, val) => {
+          const m = new Map();
+          view.forEach(r => {
+            const u = upk(r[key]) || '\u2014';
+            let o = m.get(u); if (!o) { o = { lab: (String(r[key] || '').trim() || '\u2014'), v: 0, n: 0 }; m.set(u, o); }
+            o.v += (+r[val] || 0); o.n++;
+          });
+          return [...m.values()];
+        };
+        return [
+          {
+            title: 'Ageing profile', sub: '\u20b9 outstanding by bucket', height: 320, legend: true, render(cv) {
+              const vals = BUCKETS.map(b => sum(view, b.k));
+              const tot = vals.reduce((a, c) => a + c, 0) || 1;
+              const cols = ['#1d9e75', '#4c9f70', '#0891b2', '#e08a1e', '#c2708f', '#d8504c', '#8a1f1b'];
+              cv._legend = BUCKETS.map((b, i) => `<span><i style="background:${cols[i]}"></i>${b.label} ${fmtPct(vals[i] / tot)}</span>`).join('');
+              return new Chart(cv, { type: 'bar', data: { labels: BUCKETS.map(b => b.label), datasets: [{ data: vals.map(Math.round), backgroundColor: cols, borderRadius: 5 }] }, options: opts({ scales: { y: crTick, x: { ticks: { maxRotation: 40, font: { size: 10 } } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => crore(c.parsed.y) + ' (' + fmtPct(c.parsed.y / tot) + ')' } } } }) });
+            }
+          },
+          {
+            title: 'Risk category split', sub: 'share of \u20b9 outstanding', height: 320, legend: true, render(cv) {
+              const e = RISKS.map(rc => ({ lab: rc, v: view.filter(p => p.risk === rc).reduce((s, p) => s + p.outstanding, 0), n: view.filter(p => p.risk === rc).length })).filter(x => x.n);
+              const tot = e.reduce((s, x) => s + Math.abs(x.v), 0) || 1;
+              cv._legend = e.map(x => `<span><i style="background:${RISK_COL[x.lab]}"></i>${x.lab} \u00b7 ${fmtN(x.n)} parties</span>`).join('');
+              return new Chart(cv, { type: 'doughnut', data: { labels: e.map(x => x.lab), datasets: [{ data: e.map(x => Math.round(Math.abs(x.v))), backgroundColor: e.map(x => RISK_COL[x.lab]), borderWidth: 2, borderColor: '#fff' }] }, options: opts({ cutout: '58%', plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => c.label + ': ' + crore(c.parsed) + ' (' + fmtPct(c.parsed / tot) + ')' } } } }) });
+            }
+          },
+          {
+            title: 'Debtor type share', sub: '\u20b9 outstanding by type', height: 310, legend: true, render(cv) {
+              const e = grp('type', 'outstanding').sort((a, b) => b.v - a.v);
+              const tot = e.reduce((s, x) => s + Math.abs(x.v), 0) || 1;
+              cv._legend = e.map((x, i) => `<span><i style="background:${PIE[i % PIE.length]}"></i>${x.lab} ${fmtPct(Math.abs(x.v) / tot)}</span>`).join('');
+              return new Chart(cv, { type: 'pie', data: { labels: e.map(x => x.lab), datasets: [{ data: e.map(x => Math.round(Math.abs(x.v))), backgroundColor: e.map((x, i) => PIE[i % PIE.length]), borderWidth: 2, borderColor: '#fff' }] }, options: opts({ plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => c.label + ': ' + crore(c.parsed) } } } }) });
+            }
+          },
+          {
+            title: 'Outstanding size bands', sub: 'number of parties per band', height: 310, legend: true, render(cv) {
+              const e = BANDS.map(b => ({ lab: b.label, n: view.filter(p => p.band === b.label).length, v: view.filter(p => p.band === b.label).reduce((s, p) => s + p.outstanding, 0) })).filter(x => x.n);
+              cv._legend = e.map((x, i) => `<span><i style="background:${PIE[i % PIE.length]}"></i>${x.lab} \u00b7 ${crore(x.v)}</span>`).join('');
+              return new Chart(cv, { type: 'bar', data: { labels: e.map(x => x.lab), datasets: [{ data: e.map(x => x.n), backgroundColor: e.map((x, i) => PIE[i % PIE.length]), borderRadius: 5 }] }, options: opts({ scales: { x: { ticks: { maxRotation: 45, font: { size: 9 } } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => fmtN(c.parsed.y) + ' parties \u00b7 ' + crore(e[c.dataIndex].v) } } } }) });
+            }
+          },
+          {
+            title: 'Top 12 parties by outstanding', sub: '\u20b9 receivable', height: 360, render(cv) {
+              const e = view.slice().sort((a, b) => b.outstanding - a.outstanding).slice(0, 12);
+              return new Chart(cv, { type: 'bar', data: { labels: e.map(x => x.partyName.length > 30 ? x.partyName.slice(0, 29) + '\u2026' : x.partyName), datasets: [{ data: e.map(x => Math.round(x.outstanding)), backgroundColor: '#163a5c', borderRadius: 4 }] }, options: opts({ indexAxis: 'y', scales: { x: crTick, y: { ticks: { font: { size: 9 } } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => crore(c.parsed.x) } } } }) });
+            }
+          },
+          {
+            title: 'Debtor type \u00d7 ageing', sub: 'stacked \u20b9 by bucket', height: 340, legend: true, render(cv) {
+              const types = [...new Set(view.map(p => p.type))].sort();
+              const cols = ['#1d9e75', '#4c9f70', '#0891b2', '#e08a1e', '#c2708f', '#d8504c', '#8a1f1b'];
+              cv._legend = BUCKETS.map((b, i) => `<span><i style="background:${cols[i]}"></i>${b.short}</span>`).join('');
+              return new Chart(cv, {
+                type: 'bar',
+                data: {
+                  labels: types, datasets: BUCKETS.map((b, i) => ({
+                    label: b.short, backgroundColor: cols[i],
+                    data: types.map(t => Math.round(view.filter(p => p.type === t).reduce((s, p) => s + p[b.k], 0)))
+                  }))
+                },
+                options: opts({ scales: { x: { stacked: true }, y: { stacked: true, ...crTick } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => c.dataset.label + ': ' + crore(c.parsed.y) } } } })
+              });
+            }
+          },
+          {
+            title: 'Top 12 parties \u2014 overdue > 90 days', sub: 'oldest exposure first', height: 360, render(cv) {
+              const e = view.slice().sort((a, b) => b.overdue90 - a.overdue90).slice(0, 12);
+              return new Chart(cv, { type: 'bar', data: { labels: e.map(x => x.partyName.length > 30 ? x.partyName.slice(0, 29) + '\u2026' : x.partyName), datasets: [{ data: e.map(x => Math.round(x.overdue90)), backgroundColor: '#d8504c', borderRadius: 4 }] }, options: opts({ indexAxis: 'y', scales: { x: crTick, y: { ticks: { font: { size: 9 } } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => crore(c.parsed.x) } } } }) });
+            }
+          },
+          {
+            title: 'Concentration curve', sub: 'cumulative % of dues by party rank', height: 320, render(cv) {
+              const e = view.slice().filter(p => p.outstanding > 0).sort((a, b) => b.outstanding - a.outstanding);
+              const tot = e.reduce((s, p) => s + p.outstanding, 0) || 1;
+              let c = 0; const pts = e.map((p, i) => { c += p.outstanding; return { x: i + 1, y: +(c / tot * 100).toFixed(2) }; });
+              return new Chart(cv, { type: 'line', data: { datasets: [{ data: pts, borderColor: '#2f6db0', backgroundColor: 'rgba(47,109,176,.15)', fill: true, tension: .25, pointRadius: 0 }] }, options: opts({ scales: { x: { type: 'linear', title: { display: true, text: 'Parties (ranked)' } }, y: { max: 100, title: { display: true, text: 'Cumulative %' }, ticks: { callback: v => v + '%' } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => 'Top ' + c.parsed.x + ' parties = ' + c.parsed.y + '% of dues' } } } }) });
+            }
+          }
+        ];
+      }
+
+      const columns = [
+        { key: '_sr', label: 'Rank', type: 'sr' },
+        { key: 'partyName', label: 'Party Name', type: 'text' }, { key: 'type', label: 'Debtor Type', type: 'text' },
+        { key: 'ledgers', label: 'No. of Ledgers', type: 'int' }, { key: 'codeList', label: 'Party Codes', type: 'text' },
+        { key: 'outstanding', label: 'Outstanding (\u20b9)', type: 'num2' }, { key: 'cr', label: '\u20b9 in Cr', type: 'num2' },
+        { key: 'pctTotal', label: '% of Total', type: 'util' },
+        { key: 'b1', label: '0-30 D', type: 'num2' }, { key: 'b2', label: '31-60 D', type: 'num2' },
+        { key: 'b3', label: '61-90 D', type: 'num2' }, { key: 'b4', label: '91-180 D', type: 'num2' },
+        { key: 'b5', label: '181-270 D', type: 'num2' }, { key: 'b6', label: '271-365 D', type: 'num2' },
+        { key: 'b7', label: '>365 D', type: 'num2' },
+        { key: 'overdue90', label: 'Overdue >90 D', type: 'num2' }, { key: 'pctOverdue', label: '% Overdue >90', type: 'util' },
+        { key: 'oldest', label: 'Oldest Ageing Bucket', type: 'text' }, { key: 'risk', label: 'Risk Category', type: 'text' },
+        { key: 'band', label: 'Size Band', type: 'text' },
+        { key: 'actual', label: 'Actual Outstanding', type: 'num2' }, { key: 'onAccount', label: 'On Accounts', type: 'num2' },
+        { key: 'pan', label: 'PAN', type: 'text' }, { key: 'gst', label: 'GST', type: 'text' }
+      ];
+      const tableColumns = columns.map(c => ({
+        key: c.key, label: c.label,
+        fmt: c.type === 'sr' ? 'sr' : c.type === 'num2' ? 'num2' : c.type === 'int' ? 'int' : c.type === 'util' ? 'util' : 'text'
+      }));
+      const filters = [
+        { key: 'type', label: 'Debtor Type', multi: true }, { key: 'risk', label: 'Risk Category', multi: true },
+        { key: 'oldest', label: 'Oldest Bucket', multi: true }, { key: 'band', label: 'Size Band', multi: true },
+        { key: 'partyName', label: 'Party', multi: true },
+        { key: 'outstanding', label: 'Outstanding (\u20b9)', type: 'range' },
+        { key: 'pctOverdue', label: '% Overdue >90', type: 'range' }
+      ];
+
+      /* ---------------- Excel export: all five sheets ---------------- */
+      const NUM2 = '#,##,##0.00', INT0 = '#,##,##0', PCT = '0.00%';
+      async function exportExcel(fileName) {
+        const data = (typeof VIEW !== 'undefined' && Array.isArray(VIEW)) ? VIEW : RAW;
+        const keys = new Set(data.map(p => p.nameKey));
+        const led = LEDGERS.filter(l => keys.has(l.nameKey));      // ledgers behind the parties in view
+        const wb = new ExcelJS.Workbook(); wb.creator = COMPANY.name; wb.created = new Date();
+        const HEAD = 'FF0E2A43', THIN = { style: 'thin', color: { argb: 'FFBFC8D4' } };
+        const bd = { top: THIN, left: THIN, bottom: THIN, right: THIN };
+        const ALT = 'FFF6F9FC', TOTBG = 'FFDCE6F4', SECT = 'FF12314F';
+        const hCell = (c, t) => { c.value = t; c.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10.5, name: 'Calibri' }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEAD } }; c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }; c.border = bd; };
+        const tCell = (c, v, o) => { c.value = v; c.border = bd; c.font = { size: 10.5, name: 'Calibri', bold: !!(o && o.bold) }; c.alignment = { horizontal: 'left' }; if (o && o.fill) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: o.fill } }; };
+        const nCell = (c, v, o) => { c.value = (v === null || v === undefined) ? null : v; c.numFmt = (o && o.fmt) || NUM2; c.border = bd; c.font = { size: 10.5, name: 'Calibri', bold: !!(o && o.bold) }; c.alignment = { horizontal: 'right' }; if (o && o.fill) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: o.fill } }; };
+        const sect = (ws, addr, t) => { const c = ws.getCell(addr); c.value = t; c.font = { bold: true, size: 11.5, name: 'Calibri', color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SECT } }; };
+        const title = (ws, addr, t, sz) => { const c = ws.getCell(addr); c.value = t; c.font = { bold: true, size: sz || 14, name: 'Calibri', color: { argb: 'FF0E2A43' } }; };
+
+        const grand = data.reduce((s, p) => s + p.outstanding, 0);
+        const B = BUCKETS.map(b => b.k);
+        const sumOf = (arr, k) => arr.reduce((s, x) => s + (+x[k] || 0), 0);
+        const types = [...new Set(led.map(l => l.type))].sort();
+
+        /* ===== 1. Dashboard ===== */
+        const wsD = wb.addWorksheet('Dashboard', { views: [{ showGridLines: false }] });
+        title(wsD, 'A1', 'SALES OUTSTANDING (SUNDRY DEBTORS) \u2014 ANALYTICS DASHBOARD');
+        { const c = wsD.getCell('A2'); c.value = 'Party-wise (same names merged) \u00b7 ' + fmtN(led.length) + ' ledgers \u2192 ' + fmtN(data.length) + ' parties'; c.font = { size: 10.5, italic: true, name: 'Calibri', color: { argb: 'FF5A6B7B' } }; }
+        sect(wsD, 'A4', 'KEY METRICS');
+        const ovAll = sumOf(data, 'overdue90');
+        const km = [['Total Outstanding (\u20b9 Cr)', grand / 1e7, NUM2], ['Overdue > 90 Days (\u20b9 Cr)', ovAll / 1e7, NUM2],
+        ['% Overdue > 90 Days', grand ? ovAll / grand : 0, PCT], ['> 365 Days \u2013 Critical (\u20b9 Cr)', sumOf(data, 'b7') / 1e7, NUM2],
+        ['Party Names with Dues', data.filter(p => p.outstanding > 0).length, INT0]];
+        km.forEach((k, i) => { const col = 2 + i * 3; tCell(wsD.getRow(5).getCell(col), k[0], { bold: true }); nCell(wsD.getRow(6).getCell(col), k[1], { fmt: k[2], bold: true }); });
+
+        // 1. ageing summary
+        sect(wsD, 'A9', '1.  AGEING SUMMARY (DAYS-WISE)');
+        ['Ageing Bucket', 'Outstanding (\u20b9)', '\u20b9 in Cr', '% of Total', 'Cumulative %', 'No. of Party Names']
+          .forEach((t, i) => hCell(wsD.getRow(10).getCell(1 + i), t));
+        let cum = 0;
+        BUCKETS.forEach((b, i) => {
+          const r = wsD.getRow(11 + i), v = sumOf(data, b.k), fill = i % 2 ? ALT : null;
+          cum += grand ? v / grand : 0;
+          tCell(r.getCell(1), b.label, { fill }); nCell(r.getCell(2), v, { fill }); nCell(r.getCell(3), v / 1e7, { fill });
+          nCell(r.getCell(4), grand ? v / grand : 0, { fill, fmt: PCT }); nCell(r.getCell(5), cum, { fill, fmt: PCT });
+          nCell(r.getCell(6), data.filter(p => p[b.k] > 0).length, { fill, fmt: INT0 });
+        });
+        { const r = wsD.getRow(18); tCell(r.getCell(1), 'TOTAL', { bold: true, fill: TOTBG }); nCell(r.getCell(2), grand, { bold: true, fill: TOTBG }); nCell(r.getCell(3), grand / 1e7, { bold: true, fill: TOTBG }); nCell(r.getCell(4), grand ? 1 : 0, { bold: true, fill: TOTBG, fmt: PCT }); tCell(r.getCell(5), '', { bold: true, fill: TOTBG }); nCell(r.getCell(6), data.filter(p => p.outstanding !== 0).length, { bold: true, fill: TOTBG, fmt: INT0 }); }
+
+        // 2. debtor type x ageing matrix (ledger level, as the reference)
+        sect(wsD, 'H9', '2.  DEBTOR TYPE \u00d7 AGEING MATRIX');
+        ['Debtor Type'].concat(BUCKETS.map(b => b.short)).concat(['Total Outstanding', '% Share', '% Overdue >90 D'])
+          .forEach((t, i) => hCell(wsD.getRow(10).getCell(8 + i), t));
+        types.forEach((t, i) => {
+          const rows = led.filter(l => l.type === t), r = wsD.getRow(11 + i), fill = i % 2 ? ALT : null;
+          const to = sumOf(rows, 'outstanding'), ov = sumOf(rows, 'overdue90');
+          tCell(r.getCell(8), t, { fill });
+          B.forEach((k, j) => nCell(r.getCell(9 + j), sumOf(rows, k), { fill }));
+          nCell(r.getCell(16), to, { fill }); nCell(r.getCell(17), grand ? to / grand : 0, { fill, fmt: PCT });
+          nCell(r.getCell(18), to ? ov / to : 0, { fill, fmt: PCT });
+        });
+        { const r = wsD.getRow(11 + types.length); tCell(r.getCell(8), 'GRAND TOTAL', { bold: true, fill: TOTBG }); B.forEach((k, j) => nCell(r.getCell(9 + j), sumOf(led, k), { bold: true, fill: TOTBG })); nCell(r.getCell(16), grand, { bold: true, fill: TOTBG }); nCell(r.getCell(17), grand ? 1 : 0, { bold: true, fill: TOTBG, fmt: PCT }); nCell(r.getCell(18), grand ? ovAll / grand : 0, { bold: true, fill: TOTBG, fmt: PCT }); }
+
+        // 4. risk category
+        sect(wsD, 'L17', '4.  RISK CATEGORY SUMMARY');
+        ['Risk Category', 'No. of Party Names', 'Outstanding (\u20b9)', '\u20b9 in Cr', '% of Total']
+          .forEach((t, i) => hCell(wsD.getRow(18).getCell(12 + i), t));
+        RISKS.forEach((rc, i) => {
+          const sub = data.filter(p => p.risk === rc), r = wsD.getRow(19 + i), v = sumOf(sub, 'outstanding'), fill = i % 2 ? ALT : null;
+          tCell(r.getCell(12), rc, { fill }); nCell(r.getCell(13), sub.length, { fill, fmt: INT0 });
+          nCell(r.getCell(14), v, { fill }); nCell(r.getCell(15), v / 1e7, { fill }); nCell(r.getCell(16), grand ? v / grand : 0, { fill, fmt: PCT });
+        });
+        { const r = wsD.getRow(19 + RISKS.length); tCell(r.getCell(12), 'TOTAL', { bold: true, fill: TOTBG }); nCell(r.getCell(13), data.length, { bold: true, fill: TOTBG, fmt: INT0 }); nCell(r.getCell(14), grand, { bold: true, fill: TOTBG }); nCell(r.getCell(15), grand / 1e7, { bold: true, fill: TOTBG }); nCell(r.getCell(16), grand ? 1 : 0, { bold: true, fill: TOTBG, fmt: PCT }); }
+
+        // 5. size bands
+        sect(wsD, 'L26', '5.  OUTSTANDING SIZE BAND SUMMARY');
+        ['Size Band', 'No. of Party Names', 'Outstanding (\u20b9)', '\u20b9 in Cr', '% of Total', 'Lower (\u20b9)', 'Upper (\u20b9)']
+          .forEach((t, i) => hCell(wsD.getRow(27).getCell(12 + i), t));
+        BANDS.forEach((b, i) => {
+          const sub = data.filter(p => p.band === b.label), r = wsD.getRow(28 + i), v = sumOf(sub, 'outstanding'), fill = i % 2 ? ALT : null;
+          tCell(r.getCell(12), b.label, { fill }); nCell(r.getCell(13), sub.length, { fill, fmt: INT0 });
+          nCell(r.getCell(14), v, { fill }); nCell(r.getCell(15), v / 1e7, { fill });
+          nCell(r.getCell(16), grand ? v / grand : 0, { fill, fmt: PCT });
+          nCell(r.getCell(17), b.lo, { fill }); nCell(r.getCell(18), b.hi, { fill });
+        });
+        { const r = wsD.getRow(28 + BANDS.length); tCell(r.getCell(12), 'TOTAL', { bold: true, fill: TOTBG }); nCell(r.getCell(13), data.length, { bold: true, fill: TOTBG, fmt: INT0 }); nCell(r.getCell(14), grand, { bold: true, fill: TOTBG }); nCell(r.getCell(15), grand / 1e7, { bold: true, fill: TOTBG }); nCell(r.getCell(16), grand ? 1 : 0, { bold: true, fill: TOTBG, fmt: PCT }); }
+
+        // 3. top 20 parties
+        sect(wsD, 'A21', '3.  TOP 20 PARTY NAMES BY OUTSTANDING');
+        ['Rank', 'Party Name', 'Type', 'Outstanding (\u20b9)', '\u20b9 in Cr', '% of Total', 'Cumulative %',
+          'Overdue >90 D (\u20b9)', 'Oldest Bucket', 'Risk Category', 'No. of Ledgers']
+          .forEach((t, i) => hCell(wsD.getRow(22).getCell(1 + i), t));
+        const top = data.slice().sort((a, b) => b.outstanding - a.outstanding).slice(0, 20);
+        let cum2 = 0;
+        top.forEach((p, i) => {
+          const r = wsD.getRow(23 + i), fill = i % 2 ? ALT : null;
+          cum2 += grand ? p.outstanding / grand : 0;
+          nCell(r.getCell(1), i + 1, { fill, fmt: INT0 }); tCell(r.getCell(2), p.partyName, { fill }); tCell(r.getCell(3), p.type, { fill });
+          nCell(r.getCell(4), p.outstanding, { fill }); nCell(r.getCell(5), p.outstanding / 1e7, { fill });
+          nCell(r.getCell(6), grand ? p.outstanding / grand : 0, { fill, fmt: PCT }); nCell(r.getCell(7), cum2, { fill, fmt: PCT });
+          nCell(r.getCell(8), p.overdue90, { fill }); tCell(r.getCell(9), p.oldest, { fill }); tCell(r.getCell(10), p.risk, { fill });
+          nCell(r.getCell(11), p.ledgers, { fill, fmt: INT0 });
+        });
+        {
+          const topSum = sumOf(top, 'outstanding'), topOv = sumOf(top, 'overdue90'), topLed = sumOf(top, 'ledgers');
+          let r = wsD.getRow(43);
+          tCell(r.getCell(2), 'Top 20 Total', { bold: true, fill: TOTBG }); nCell(r.getCell(4), topSum, { bold: true, fill: TOTBG });
+          nCell(r.getCell(5), topSum / 1e7, { bold: true, fill: TOTBG }); nCell(r.getCell(6), grand ? topSum / grand : 0, { bold: true, fill: TOTBG, fmt: PCT });
+          nCell(r.getCell(8), topOv, { bold: true, fill: TOTBG }); nCell(r.getCell(11), topLed, { bold: true, fill: TOTBG, fmt: INT0 });
+          r = wsD.getRow(44);
+          tCell(r.getCell(2), 'Balance ' + fmtN(Math.max(0, data.length - 20)) + ' party names', { bold: true, fill: TOTBG });
+          nCell(r.getCell(4), grand - topSum, { bold: true, fill: TOTBG }); nCell(r.getCell(5), (grand - topSum) / 1e7, { bold: true, fill: TOTBG });
+          nCell(r.getCell(6), grand ? (grand - topSum) / grand : 0, { bold: true, fill: TOTBG, fmt: PCT });
+          nCell(r.getCell(8), ovAll - topOv, { bold: true, fill: TOTBG }); nCell(r.getCell(11), sumOf(data, 'ledgers') - topLed, { bold: true, fill: TOTBG, fmt: INT0 });
+          r = wsD.getRow(45);
+          tCell(r.getCell(2), 'GRAND TOTAL', { bold: true, fill: TOTBG }); nCell(r.getCell(4), grand, { bold: true, fill: TOTBG });
+          nCell(r.getCell(5), grand / 1e7, { bold: true, fill: TOTBG }); nCell(r.getCell(6), grand ? 1 : 0, { bold: true, fill: TOTBG, fmt: PCT });
+          nCell(r.getCell(8), ovAll, { bold: true, fill: TOTBG }); nCell(r.getCell(11), sumOf(data, 'ledgers'), { bold: true, fill: TOTBG, fmt: INT0 });
+        }
+        wsD.getColumn(1).width = 22; wsD.getColumn(2).width = 40;
+        for (let c = 3; c <= 18; c++) wsD.getColumn(c).width = 17;
+
+        /* ===== 2. Party Summary (merged by name) ===== */
+        const wsS = wb.addWorksheet('Party Summary', { views: [{ state: 'frozen', ySplit: 3 }] });
+        title(wsS, 'A1', 'PARTY-WISE OUTSTANDING \u2014 MERGED BY PARTY NAME (' + fmtN(data.length) + ' parties from ' + fmtN(led.length) + ' ledgers)', 12);
+        { const c = wsS.getCell('A2'); c.value = 'Multiple ledger accounts / GST registrations of the same party name are consolidated into a single line.'; c.font = { size: 10, italic: true, name: 'Calibri', color: { argb: 'FF5A6B7B' } }; }
+        ['Rank', 'Party Name', 'No. of Ledgers', 'Debtor Type', 'Outstanding (\u20b9)', '\u20b9 in Cr', '% of Total']
+          .concat(BUCKETS.map(b => b.short)).concat(['Overdue >90 D', '% Overdue >90', 'Oldest Ageing Bucket', 'Risk Category'])
+          .forEach((t, i) => hCell(wsS.getRow(3).getCell(1 + i), t));
+        data.forEach((p, i) => {
+          const r = wsS.getRow(4 + i), fill = i % 2 ? ALT : null;
+          nCell(r.getCell(1), i + 1, { fill, fmt: INT0 }); tCell(r.getCell(2), p.partyName, { fill });
+          nCell(r.getCell(3), p.ledgers, { fill, fmt: INT0 }); tCell(r.getCell(4), p.type, { fill });
+          nCell(r.getCell(5), p.outstanding, { fill }); nCell(r.getCell(6), p.outstanding / 1e7, { fill });
+          nCell(r.getCell(7), grand ? p.outstanding / grand : 0, { fill, fmt: PCT });
+          B.forEach((k, j) => nCell(r.getCell(8 + j), p[k], { fill }));
+          nCell(r.getCell(15), p.overdue90, { fill }); nCell(r.getCell(16), p.pctOverdue, { fill, fmt: PCT });
+          tCell(r.getCell(17), p.oldest, { fill }); tCell(r.getCell(18), p.risk, { fill });
+        });
+        {
+          const r = wsS.getRow(4 + data.length);
+          tCell(r.getCell(1), '', { bold: true, fill: TOTBG }); tCell(r.getCell(2), 'TOTAL (' + fmtN(data.length) + ' parties)', { bold: true, fill: TOTBG });
+          nCell(r.getCell(3), sumOf(data, 'ledgers'), { bold: true, fill: TOTBG, fmt: INT0 }); tCell(r.getCell(4), '', { bold: true, fill: TOTBG });
+          nCell(r.getCell(5), grand, { bold: true, fill: TOTBG }); nCell(r.getCell(6), grand / 1e7, { bold: true, fill: TOTBG });
+          nCell(r.getCell(7), grand ? 1 : 0, { bold: true, fill: TOTBG, fmt: PCT });
+          B.forEach((k, j) => nCell(r.getCell(8 + j), sumOf(data, k), { bold: true, fill: TOTBG }));
+          nCell(r.getCell(15), ovAll, { bold: true, fill: TOTBG }); nCell(r.getCell(16), grand ? ovAll / grand : 0, { bold: true, fill: TOTBG, fmt: PCT });
+        }
+        wsS.getColumn(1).width = 7; wsS.getColumn(2).width = 44; wsS.getColumn(3).width = 13; wsS.getColumn(4).width = 14;
+        for (let c = 5; c <= 18; c++) wsS.getColumn(c).width = 16;
+        wsS.autoFilter = { from: { row: 3, column: 1 }, to: { row: 3, column: 18 } };
+
+        /* ===== 3. Party Wise (one row per ledger) ===== */
+        const wsW = wb.addWorksheet('Party Wise', { views: [{ state: 'frozen', ySplit: 3 }] });
+        title(wsW, 'A1', 'PARTY-WISE OUTSTANDING ANALYSIS (linked to Master File)', 12);
+        ['Rank', 'Party Name', 'Debtor Type', 'Outstanding (\u20b9)', '% of Total']
+          .concat(BUCKETS.map(b => b.short)).concat(['Overdue >90 D', '% Overdue >90', 'Oldest Ageing Bucket', 'Risk Category', 'Name Key (merge key)'])
+          .forEach((t, i) => hCell(wsW.getRow(3).getCell(1 + i), t));
+        const ledSorted = led.slice().sort((a, b) => b.outstanding - a.outstanding);
+        const ledTot = sumOf(ledSorted, 'outstanding');
+        ledSorted.forEach((l, i) => {
+          const r = wsW.getRow(4 + i), fill = i % 2 ? ALT : null;
+          nCell(r.getCell(1), i + 1, { fill, fmt: INT0 }); tCell(r.getCell(2), l.partyName, { fill }); tCell(r.getCell(3), l.type, { fill });
+          nCell(r.getCell(4), l.outstanding, { fill }); nCell(r.getCell(5), ledTot ? l.outstanding / ledTot : 0, { fill, fmt: PCT });
+          B.forEach((k, j) => nCell(r.getCell(6 + j), l[k], { fill }));
+          nCell(r.getCell(13), l.overdue90, { fill }); nCell(r.getCell(14), l.pctOverdue, { fill, fmt: PCT });
+          tCell(r.getCell(15), l.oldest, { fill }); tCell(r.getCell(16), l.risk, { fill }); tCell(r.getCell(17), l.nameKey, { fill });
+        });
+        {
+          const r = wsW.getRow(4 + ledSorted.length);
+          tCell(r.getCell(2), 'TOTAL (' + fmtN(ledSorted.length) + ' ledgers)', { bold: true, fill: TOTBG });
+          nCell(r.getCell(4), ledTot, { bold: true, fill: TOTBG }); nCell(r.getCell(5), ledTot ? 1 : 0, { bold: true, fill: TOTBG, fmt: PCT });
+          B.forEach((k, j) => nCell(r.getCell(6 + j), sumOf(ledSorted, k), { bold: true, fill: TOTBG }));
+          nCell(r.getCell(13), sumOf(ledSorted, 'overdue90'), { bold: true, fill: TOTBG });
+        }
+        wsW.getColumn(1).width = 7; wsW.getColumn(2).width = 44; wsW.getColumn(3).width = 14;
+        for (let c = 4; c <= 16; c++) wsW.getColumn(c).width = 16; wsW.getColumn(17).width = 44;
+        wsW.autoFilter = { from: { row: 3, column: 1 }, to: { row: 3, column: 17 } };
+
+        /* ===== 4. R1 (debtor type \u00d7 ageing pivot) ===== */
+        const wsR = wb.addWorksheet('R1', { views: [{ showGridLines: false }] });
+        ['Debtors type'].concat(BUCKETS.map(b => b.k === 'b7' ? 'Above 365 D' : b.short)).concat(['Total Oustsanding'])
+          .forEach((t, i) => hCell(wsR.getRow(3).getCell(1 + i), t));
+        types.forEach((t, i) => {
+          const rows = led.filter(l => l.type === t), r = wsR.getRow(4 + i), fill = i % 2 ? ALT : null;
+          tCell(r.getCell(1), 'Sundry Debtors ' + t, { fill });
+          B.forEach((k, j) => nCell(r.getCell(2 + j), sumOf(rows, k), { fill }));
+          nCell(r.getCell(9), sumOf(rows, 'outstanding'), { fill });
+        });
+        {
+          let r = wsR.getRow(4 + types.length);
+          tCell(r.getCell(1), 'Grand Total', { bold: true, fill: TOTBG });
+          B.forEach((k, j) => nCell(r.getCell(2 + j), sumOf(led, k), { bold: true, fill: TOTBG }));
+          nCell(r.getCell(9), ledTot, { bold: true, fill: TOTBG });
+          r = wsR.getRow(5 + types.length);
+          tCell(r.getCell(1), 'Value in Cr', { bold: true, fill: TOTBG });
+          B.forEach((k, j) => nCell(r.getCell(2 + j), sumOf(led, k) / 1e7, { bold: true, fill: TOTBG }));
+          nCell(r.getCell(9), ledTot / 1e7, { bold: true, fill: TOTBG });
+        }
+        wsR.getColumn(1).width = 26; for (let c = 2; c <= 9; c++) wsR.getColumn(c).width = 18;
+
+        /* ===== 5. Master File (verbatim echo of the uploaded ledger rows) ===== */
+        const wsM = wb.addWorksheet('Master File', { views: [{ state: 'frozen', ySplit: 1 }] });
+        const MH = ['PARTY TYPE', 'GL CODE', 'PARTY CODE', 'PARTY NAME', 'ACTUAL OUTSTANDING', 'ON ACCOUNTS',
+          'OUTSTANDING AMOUNT', '0-30 DAYS', '31-60 DAYS', '61-90 DAYS', '91-180 DAYS', '181-270 DAYS',
+          '271-365 DAYS', '>365 DAYS', 'PARTY PAN NO', 'PARTY GST'];
+        MH.forEach((t, i) => hCell(wsM.getRow(1).getCell(i + 1), t));
+        const mrows = led.map(l => [l.partyType, l.gl, l.partyCode, l.partyName, l.actual, l.onAccount, l.outstanding,
+        l.b1, l.b2, l.b3, l.b4, l.b5, l.b6, l.b7, l.pan, l.gst]);
+        if (mrows.length) wsM.addRows(mrows);
+        for (let c = 5; c <= 14; c++) wsM.getColumn(c).numFmt = NUM2;
+        wsM.getColumn(1).width = 26; wsM.getColumn(2).width = 18; wsM.getColumn(3).width = 13; wsM.getColumn(4).width = 44;
+        for (let c = 5; c <= 14; c++) wsM.getColumn(c).width = 17;
+        wsM.getColumn(15).width = 16; wsM.getColumn(16).width = 20;
+        wsM.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: 16 } };
+
+        const buf = await wb.xlsx.writeBuffer();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+        a.download = fileName; a.click();
+      }
+
+      return {
+        meta: {
+          name: 'Outstanding Report',
+          tagline: 'Sundry debtors ageing \u2014 party-wise outstanding, overdue exposure and risk category',
+          icon: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>'
+        },
+        hint: 'Upload the ERP <b>Master File</b> (Party Type, Party Code, Party Name, Outstanding Amount and the 0-30 \u2026 &gt;365 day buckets). Ledgers are merged by party name, so multiple GST registrations of the same customer roll into one line. <b>Overdue &gt;90</b> = 91-180 + 181-270 + 271-365 + &gt;365. The Excel export rebuilds <b>Dashboard</b>, <b>Party Summary</b>, <b>Party Wise</b>, <b>R1</b> and <b>Master File</b>.',
+        sheetName: 'Outstanding', exportName: 'VisionInfra-Outstanding-Report',
+        process, kpis, charts, columns, tableColumns, filters, cascadeFilters: true,
+        searchKeys: ['partyName', 'type', 'risk', 'oldest', 'band', 'pan', 'gst', 'codeList'],
         exportExcel
       };
     })();
