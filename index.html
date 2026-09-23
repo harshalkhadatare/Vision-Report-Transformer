@@ -3798,13 +3798,36 @@
         if (sel) {
           const cur = sel.value;
           const acts = [...new Set(ADM_ACT.map(r => r.action).filter(Boolean))].sort();
-          sel.innerHTML = '<option value="">All actions</option>' + acts.map(a => '<option>' + a + '</option>').join('');
+          sel.innerHTML = '<option value="">All actions</option>'
+            + acts.map(a => '<option value="' + a + '">' + actLabel(a) + '</option>').join('');
           sel.value = cur;
         }
         ACT_LIMIT = 100;
         renderAdminActivity();
       } catch (e) { const t = document.getElementById('admActTable'); if (t) t.innerHTML = '<tbody><tr><td style="text-align:center;padding:20px">Could not load activity.</td></tr></tbody>'; }
     }
+    /* The raw action codes are ambiguous to read: "report" is written when a user
+       EXPORTS a report (the detail is the generated download name, e.g.
+       VisionInfra-Outstanding-Report-2026-09-22.xlsx), while "upload" is written
+       when a user actually adds an ERP file. Those two were easy to confuse in the
+       log, so each action is now shown with a plain-English label and its own
+       colour, and exports carry a download arrow. */
+    const ACT_LABEL = {
+      report: 'exported report', upload: 'uploaded file', delete_file: 'deleted file',
+      login: 'login', logout: 'logout', login_failed: 'login failed',
+      register: 'registered', approved: 'approved user', approve: 'approved user',
+      rejected: 'rejected user', reject: 'rejected user', delete_user: 'deleted user',
+      rename_user: 'renamed user', set_role: 'changed role', set_email: 'changed email',
+      role_rights: 'report rights', password_change: 'password changed',
+      password_reset: 'password reset', otp_requested: 'reset code sent',
+      session_expired: 'session expired', email_schedule: 'email schedule'
+    };
+    const ACT_PILL = {
+      report: 'pending', upload: 'approved', delete_file: 'rejected', delete_user: 'rejected',
+      login_failed: 'rejected', session_expired: 'rejected', logout: 'user', login: 'user'
+    };
+    const actLabel = a => ACT_LABEL[a] || String(a || '\u2014').replace(/_/g, ' ');
+    const actPill = a => ACT_PILL[a] || 'admin';
     function actRoleOf(userId) {
       const u = (ADM_USERS || []).find(x => x.user_id === userId);
       return u ? u.role : '';
@@ -3860,7 +3883,9 @@
         const role = actRoleOf(r.user_id);
         return '<tr><td>' + when + '</td><td>' + esc(r.name || r.user_id || '\u2014') + '</td>'
           + '<td>' + (role ? '<span class="pill ' + role + '">' + (role === 'admin' ? 'Administrator' : 'User') + '</span>' : '\u2014') + '</td>'
-          + '<td><span class="pill ' + (r.action === 'login_failed' ? 'rejected' : 'admin') + '">' + esc(r.action) + '</span></td>'
+          + '<td><span class="pill ' + actPill(r.action) + '" title="' + esc(r.action) + '">'
+          + (r.action === 'report' ? '\u2193 ' : r.action === 'upload' ? '\u2191 ' : '')
+          + esc(actLabel(r.action)) + '</span></td>'
           + '<td>' + (esc(r.detail) || '') + '</td></tr>';
       }).join('') || '<tr><td colspan="5" style="text-align:center;padding:20px">No activity matches these filters.</td></tr>';
       if (all.length > rows.length) {
@@ -9818,6 +9843,11 @@
       const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
       a.download = fileName; a.click();
     }
+    // Every export is recorded, not just Excel: CSV and PDF downloads were silently
+    // missing from the activity log, so an admin could not see the full picture.
+    async function logExport(fileName) {
+      try { if (SB && USER && USER.token) await SB.rpc('log_report', { p_token: USER.token, p_report_type: CURRENT, p_report_name: fileName }); } catch (e) { }
+    }
     function exportXlsx() {
       showLoad('Building styled Excel…');
       setTimeout(async () => {
@@ -9827,7 +9857,7 @@
           if (PROC.exportExcel) { await PROC.exportExcel(fn); }
           else { await styledExcel(PROC, VIEW, fn); }
           setMsg(`<b>Excel report generated.</b> ${PROC.exportExcel ? 'Full 8-section summary layout.' : fmtN(VIEW.length) + ' rows, fully formatted.'}`, 'ok');
-          try { if (SB && USER && USER.token) await SB.rpc('log_report', { p_token: USER.token, p_report_type: CURRENT, p_report_name: fn }); } catch (e) { }
+          await logExport(fn);
         }
         catch (e) { setMsg('Could not build Excel: ' + (e.message || e), 'err'); } hideLoad();
       }, 120);
@@ -9838,7 +9868,9 @@
       VIEW.forEach((r, i) => lines.push(cols.map(c => { if (c.type === 'sr') return i + 1; let v = r[c.key]; if (v instanceof Date && !isNaN(v)) v = v.getFullYear() + '-' + String(v.getMonth() + 1).padStart(2, '0') + '-' + String(v.getDate()).padStart(2, '0'); if (c.type === 'num2') v = (+r[c.key] || 0).toFixed(2); return q(v); }).join(',')));
       try { statsBumpDownload(CURRENT); } catch (e) { }
       const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
-      a.download = PROC.exportName + '-' + new Date().toISOString().slice(0, 10) + '.csv'; a.click();
+      const fn = PROC.exportName + '-' + new Date().toISOString().slice(0, 10) + '.csv';
+      a.download = fn; a.click();
+      logExport(fn);
     }
     async function exportPdf() {
       try { statsBumpDownload(CURRENT); } catch (e) { }
@@ -9855,7 +9887,8 @@
           part.getContext('2d').drawImage(canvas, 0, sy, canvas.width, part.height, 0, 0, canvas.width, part.height);
           pdf.addImage(part.toDataURL('image/png'), 'PNG', 8, y, iw, slice); rem -= slice; sy += part.height; if (rem > 0) { pdf.addPage(); y = 10; }
         }
-        pdf.save(PROC.exportName + '-' + new Date().toISOString().slice(0, 10) + '.pdf');
+        const fn = PROC.exportName + '-' + new Date().toISOString().slice(0, 10) + '.pdf';
+        pdf.save(fn); logExport(fn);
       } catch (e) { setMsg('Could not generate PDF: ' + e.message, 'err'); } hideLoad();
     }
 
