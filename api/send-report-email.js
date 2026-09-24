@@ -47,7 +47,8 @@ const REPORT_NAMES = {
   crusher: 'Crusher Report',
   saleorder: 'Sales Order Status',
   pmmonthly: 'P&M Monthly Report',
-  outstanding: 'Outstanding Report'
+  outstanding: 'Outstanding Report',
+  fleetloan: 'Fleet List (Loan Status)'
 };
 
 // Administrator contacts shown at the bottom of every alert.

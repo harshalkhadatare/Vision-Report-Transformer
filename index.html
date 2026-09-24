@@ -3912,7 +3912,8 @@
     const REPORT_CATEGORIES = [
       { id: 'pm', label: 'P&M Reports', icon: '\uD83D\uDCC2', reports: ['rental', 'milling', 'bin', 'crusher', 'pmmonthly'] },
       { id: 'store', label: 'Purchase & Store', icon: '\uD83D\uDCC2', reports: ['stock', 'pogin', 'ageing'] },
-      { id: 'sales', label: 'Sales', icon: '\uD83D\uDCC2', reports: ['sales', 'saleorder', 'outstanding'] }
+      { id: 'sales', label: 'Sales', icon: '\uD83D\uDCC2', reports: ['sales', 'saleorder', 'outstanding'] },
+      { id: 'accounts', label: 'Accounts', icon: '\uD83D\uDCC2', reports: ['fleetloan'] }
     ];
     const SN_OPEN_KEY = 'vi_nav_open';
     const LOCK_TIP = "You don't have permission to access this report. Please contact your administrator.";
@@ -8977,6 +8978,597 @@
         sheetName: 'Outstanding', exportName: 'VisionInfra-Outstanding-Report',
         process, kpis, charts, columns, tableColumns, filters, cascadeFilters: true,
         searchKeys: ['partyName', 'type', 'risk', 'oldest', 'band', 'pan', 'gst', 'codeList'],
+        exportExcel
+      };
+    })();
+
+
+    /* ===================== FLEET LIST (LOAN STATUS) ===================== */
+    /* Reverse-engineered from Loan_EMI_WORKING.xlsx and reconciled to the rupee:
+       393 loans, loan amount 4,885,773,559.95, outstanding 3,516,392,232.07,
+       repaid 1,369,381,327.88 (28%), 29 lenders, monthly EMI 131,592,496.35.
+
+       Source sheet: 'Sandeep Woring' (one row per loan/asset).
+       Derived exactly as the workbook does:
+         Amount Repaid  = Loan Amt - Loan Outstanding Bal
+         % Repaid       = repaid / loan amt              (IFERROR -> 0)
+         Balance Days   = End Date - EMI PAID DATE       (=+V2-X2)
+         Balance band   = <=0 Ended/Overdue | 1-90 0-3M | 91-180 3-6M |
+                          181-365 6-12M | 366-730 1-2Y | 731-1095 2-3Y | 1096+ 3Y+
+         EMIs Left      = EMI Bal
+         EMI due in the report month = COUNTIFS/SUMIFS in the reference:
+              Start date <= month end  AND  End Date >= month start  AND  EMI Bal > 0
+           Note this ignores the EMI day-of-month entirely, and it is why one loan
+           starting 24-Nov-2026 is NOT counted as due for September 2026 - giving
+           392 EMIs due and 131,099,909.35, exactly as the reference shows.
+         Report month   = the month AFTER the latest EMI PAID DATE in the data
+                          ('Report Month auto = next month' in the reference).
+       The AFL LIST sheet is a supporting asset list (the assets behind the single
+       Axis Finance bulk loan); it is not derivable, so it is carried through from
+       the upload verbatim. */
+    REPORTS.fleetloan = (function () {
+      const COLS = {
+        sr: ['srno'], bank: ['bankname'], status: ['status'], deptShort: ['dept'],
+        assetOld: ['assetscodeold'], assetNew: ['newassetcode'], dept: ['department'],
+        fleet: ['fleettype'], make: ['make'], model: ['model'], yom: ['yom'],
+        make2: ['make2'], chassis: ['chassisno'], engine: ['engineno'],
+        regd: ['regdnoengineno'], loanNo: ['loannumber'], loanAmt: ['loanamt'],
+        emiAmt: ['emiamount'], emiDay: ['emidate'], acct: ['banknameaccount'],
+        start: ['startdate'], end: ['enddate'], nEmi: ['noofemis'],
+        paidDate: ['emipaiddate'], emiPaid: ['emipaid'], emiBal: ['emibal'],
+        osBal: ['loanoutstandingbal'], balDays: ['balancedays'], balBand: ['balancedaysband']
+      };
+      const BANDS = [
+        { label: 'Ended / Overdue (\u22640 days)', lo: -99999, hi: 0 },
+        { label: '0\u20133 Months', lo: 1, hi: 90 }, { label: '3\u20136 Months', lo: 91, hi: 180 },
+        { label: '6\u201312 Months', lo: 181, hi: 365 }, { label: '1\u20132 Years', lo: 366, hi: 730 },
+        { label: '2\u20133 Years', lo: 731, hi: 1095 }, { label: 'Above 3 Years', lo: 1096, hi: 99999 }
+      ];
+      let AFL = { name: 'AFL LIST ', headers: [], rows: [] };
+      let MASTER = { name: 'Sandeep Woring', headers: [], rows: [] };
+      let PERIOD = null;      // { start, end, label } of the report month
+      const upk = v => String(v == null ? '' : v).trim().toUpperCase();
+      const T = v => String(v == null ? '' : v).trim();
+      const MON = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
+        'August', 'September', 'October', 'November', 'December'];
+      const dayDiff = (a, b) => Math.round((a.getTime() - b.getTime()) / 864e5);
+      const bandOf = d => {
+        const v = (d == null || isNaN(d)) ? 0 : d;
+        for (const b of BANDS) if (v >= b.lo && v <= b.hi) return b.label;
+        return BANDS[BANDS.length - 1].label;
+      };
+
+      function sheetAoa(wb, tokens) {
+        const names = wb.SheetNames || [];
+        let name = null;
+        for (const t of tokens) { name = names.find(n => norm(n) === t); if (name) break; }
+        if (!name) for (const t of tokens) { name = names.find(n => norm(n).includes(t)); if (name) break; }
+        if (!name) return null;
+        return { name, aoa: XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: '', raw: true }) };
+      }
+
+      function process(wb) {
+        const S = sheetAoa(wb, ['sandeepworing', 'sandeepworking', 'sandeep', 'master'])
+          || { name: wb.SheetNames[0], aoa: XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '', raw: true }) };
+        if (!S.aoa.length) throw new Error('The loan sheet is empty.');
+        const hi = findHeader(S.aoa, ['loannumber', 'loanamt', 'emiamount', 'bankname']);
+        const headers = (S.aoa[hi] || []).map(String); const m = mapCols(headers, COLS);
+        for (const f of ['bank', 'loanAmt', 'osBal'])
+          if (m[f] === undefined)
+            throw new Error('This does not look like the loan working sheet. Expected columns like '
+              + 'Bank Name, Loan Amt, EMI Amount and Loan Outstanding Bal (missing: ' + f + ').');
+
+        MASTER = { name: S.name, headers: headers.slice(), rows: [] };
+        const rows = [];
+        for (let i = hi + 1; i < S.aoa.length; i++) {
+          const r = S.aoa[i]; if (!r || !r.length) continue;
+          const bank = T(r[m.bank]); if (!bank) continue;       // blank spacer rows
+          MASTER.rows.push(r);
+          const loanAmt = numv(r[m.loanAmt]), osBal = numv(r[m.osBal]);
+          const end = m.end != null ? toDate(r[m.end]) : null;
+          const start = m.start != null ? toDate(r[m.start]) : null;
+          const paid = m.paidDate != null ? toDate(r[m.paidDate]) : null;
+          let bd = m.balDays != null && r[m.balDays] !== '' ? numv(r[m.balDays]) : null;
+          if (bd === null && end && paid) bd = dayDiff(end, paid);      // =+End - EMI paid date
+          const o = {
+            sr: numv(r[m.sr]), bank: bank, status: T(r[m.status]), deptShort: T(r[m.deptShort]),
+            assetOld: T(r[m.assetOld]), assetNew: T(r[m.assetNew]),
+            dept: T(r[m.dept]) || T(r[m.deptShort]), fleet: T(r[m.fleet]),
+            make: T(r[m.make]), model: T(r[m.model]), yom: T(r[m.yom]),
+            chassis: T(r[m.chassis]), engine: T(r[m.engine]), regd: T(r[m.regd]),
+            loanNo: T(r[m.loanNo]), loanAmt: loanAmt, emiAmt: numv(r[m.emiAmt]),
+            emiDay: m.emiDay != null && r[m.emiDay] !== '' ? numv(r[m.emiDay]) : null,
+            acct: T(r[m.acct]), start: start, end: end, nEmi: numv(r[m.nEmi]),
+            paidDate: paid, emiPaid: numv(r[m.emiPaid]), emiBal: numv(r[m.emiBal]),
+            osBal: osBal, repaid: loanAmt - osBal,
+            pctRepaid: loanAmt ? (loanAmt - osBal) / loanAmt : 0,
+            balDays: bd, band: bandOf(bd),
+            _m: r
+          };
+          rows.push(o);
+        }
+
+        // ---- report month = the month AFTER the latest EMI PAID DATE ----
+        let latest = null;
+        rows.forEach(r => { if (r.paidDate && (!latest || r.paidDate > latest)) latest = r.paidDate; });
+        const base = latest || new Date();
+        const pStart = new Date(base.getFullYear(), base.getMonth() + 1, 1);
+        const pEnd = new Date(pStart.getFullYear(), pStart.getMonth() + 1, 0);
+        PERIOD = { start: pStart, end: pEnd, label: MON[pStart.getMonth()] + ' ' + pStart.getFullYear() };
+        // EMI due rule taken verbatim from the reference COUNTIFS/SUMIFS
+        rows.forEach(r => {
+          r.dueNow = !!(r.start && r.end && r.start <= pEnd && r.end >= pStart && r.emiBal > 0);
+          r.emiDueAmt = r.dueNow ? r.emiAmt : 0;
+          r.dueLabel = r.dueNow ? 'Due' : 'Not due';
+          r.dueDate = (r.dueNow && r.emiDay >= 1 && r.emiDay <= 31)
+            ? new Date(pStart.getFullYear(), pStart.getMonth(), Math.min(r.emiDay, pEnd.getDate())) : null;
+        });
+
+        // ---- AFL LIST carried through verbatim (not derivable from the master) ----
+        const A = sheetAoa(wb, ['afllist', 'afl']);
+        AFL = { name: 'AFL LIST ', headers: [], rows: [] };
+        if (A && A.aoa.length) {
+          const ah = findHeader(A.aoa, ['assetscode', 'assettype', 'serialno']);
+          AFL.name = A.name;
+          AFL.headers = (A.aoa[ah] || []).map(String);
+          for (let i = ah + 1; i < A.aoa.length; i++) {
+            const r = A.aoa[i];
+            if (r && r.length && r.some(x => String(x == null ? '' : x).trim() !== '')) AFL.rows.push(r);
+          }
+        }
+        const lenders = new Set(rows.map(r => upk(r.bank))).size;
+        return {
+          rows,
+          note: `Read ${fmtN(rows.length)} loans across ${fmtN(lenders)} lenders`
+            + (AFL.rows.length ? ` and ${fmtN(AFL.rows.length)} AFL assets` : '')
+            + `. EMI month: ${PERIOD.label}.`
+        };
+      }
+
+      function kpis(view) {
+        const loan = sum(view, 'loanAmt'), os = sum(view, 'osBal'), rep = loan - os;
+        const due = view.filter(r => r.dueNow);
+        const lenders = new Set(view.map(r => upk(r.bank)).filter(Boolean)).size;
+        return [
+          ['Total Loans', fmtN(view.length), 'assets under finance', '#2f6db0'],
+          ['Loan Amount', crore(loan), 'total sanctioned', '#7c5cbf'],
+          ['Outstanding', crore(os), 'principal still owed', '#d8504c'],
+          ['Amount Repaid', crore(rep), 'paid down to date', '#1d9e75'],
+          ['% Repaid', fmtPct(loan ? rep / loan : 0), 'share of loan cleared', '#1d9e75'],
+          ['Monthly EMI', crore(sum(view, 'emiAmt')), 'full monthly obligation', '#e08a1e'],
+          ['EMIs Due \u2014 ' + (PERIOD ? PERIOD.label : ''), fmtN(due.length), 'loans billing this month', '#0891b2'],
+          ['EMI Amount Due', crore(due.reduce((s, r) => s + r.emiAmt, 0)), 'payable in the month', '#0891b2'],
+          ['Lenders', fmtN(lenders), 'distinct banks / NBFCs', '#163a5c'],
+          ['EMIs Left', fmtN(sum(view, 'emiBal')), 'instalments remaining', '#8a98a4']
+        ];
+      }
+
+      function charts(view) {
+        const opts = g => ({ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, ...g });
+        const PIE = ['#2f6db0', '#1d9e75', '#e08a1e', '#7c5cbf', '#0891b2', '#d8504c', '#163a5c', '#4c9f70', '#c2708f', '#8a98a4'];
+        const crTick = { ticks: { callback: v => fmtN(v / 1e7, 1) + ' Cr' } };
+        const grp = (key, val) => {
+          const m = new Map();
+          view.forEach(r => {
+            const u = upk(r[key]) || '\u2014';
+            let o = m.get(u); if (!o) { o = { lab: (T(r[key]) || '\u2014'), v: 0, n: 0, loan: 0, os: 0 }; m.set(u, o); }
+            o.v += (+r[val] || 0); o.n++; o.loan += r.loanAmt; o.os += r.osBal;
+          });
+          return [...m.values()];
+        };
+        const pieOf = (title, sub, key) => ({
+          title, sub, height: 320, legend: true, render(cv) {
+            const e = grp(key, 'osBal').filter(x => x.v > 0).sort((a, b) => b.v - a.v);
+            const top = e.slice(0, 9), rest = e.slice(9);
+            if (rest.length) top.push({ lab: 'Others (' + rest.length + ')', v: rest.reduce((s, x) => s + x.v, 0) });
+            const tot = top.reduce((s, x) => s + x.v, 0) || 1;
+            cv._legend = top.map((x, i) => `<span><i style="background:${PIE[i % PIE.length]}"></i>${x.lab} ${fmtPct(x.v / tot)}</span>`).join('');
+            return new Chart(cv, {
+              type: 'pie', data: { labels: top.map(x => x.lab), datasets: [{ data: top.map(x => Math.round(x.v)), backgroundColor: top.map((x, i) => PIE[i % PIE.length]), borderWidth: 2, borderColor: '#fff' }] },
+              options: opts({ plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => c.label + ': ' + crore(c.parsed) + ' (' + fmtPct(c.parsed / tot) + ')' } } } })
+            });
+          }
+        });
+        return [
+          {
+            title: 'Repaid vs Outstanding', sub: 'by loan status \u2014 \u20b9 value', height: 320, legend: true, render(cv) {
+              const e = grp('status', 'osBal').sort((a, b) => b.loan - a.loan);
+              cv._legend = '<span><i style="background:#1d9e75"></i>Repaid</span><span><i style="background:#d8504c"></i>Outstanding</span>';
+              return new Chart(cv, {
+                type: 'bar', data: {
+                  labels: e.map(x => x.lab), datasets: [
+                    { label: 'Repaid', data: e.map(x => Math.round(x.loan - x.os)), backgroundColor: '#1d9e75', borderRadius: 4 },
+                    { label: 'Outstanding', data: e.map(x => Math.round(x.os)), backgroundColor: '#d8504c', borderRadius: 4 }]
+                },
+                options: opts({ scales: { x: { stacked: true }, y: { stacked: true, ...crTick } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => c.dataset.label + ': ' + crore(c.parsed.y) } } } })
+              });
+            }
+          },
+          {
+            title: 'Balance days band', sub: 'outstanding by remaining tenure', height: 320, legend: true, render(cv) {
+              const cols = ['#d8504c', '#1d9e75', '#4c9f70', '#0891b2', '#e08a1e', '#c2708f', '#163a5c'];
+              const e = BANDS.map((b, i) => ({ lab: b.label, v: view.filter(r => r.band === b.label).reduce((s, r) => s + r.osBal, 0), n: view.filter(r => r.band === b.label).length, c: cols[i] })).filter(x => x.n);
+              const tot = e.reduce((s, x) => s + x.v, 0) || 1;
+              cv._legend = e.map(x => `<span><i style="background:${x.c}"></i>${x.lab} \u00b7 ${fmtN(x.n)}</span>`).join('');
+              return new Chart(cv, { type: 'doughnut', data: { labels: e.map(x => x.lab), datasets: [{ data: e.map(x => Math.round(x.v)), backgroundColor: e.map(x => x.c), borderWidth: 2, borderColor: '#fff' }] }, options: opts({ cutout: '56%', plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => c.label + ': ' + crore(c.parsed) + ' (' + fmtPct(c.parsed / tot) + ')' } } } }) });
+            }
+          },
+          {
+            title: 'Top 12 lenders by outstanding', sub: '\u20b9 principal owed', height: 360, render(cv) {
+              const e = grp('bank', 'osBal').sort((a, b) => b.v - a.v).slice(0, 12);
+              return new Chart(cv, { type: 'bar', data: { labels: e.map(x => x.lab.length > 28 ? x.lab.slice(0, 27) + '\u2026' : x.lab), datasets: [{ data: e.map(x => Math.round(x.v)), backgroundColor: '#163a5c', borderRadius: 4 }] }, options: opts({ indexAxis: 'y', scales: { x: crTick, y: { ticks: { font: { size: 9.5 } } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => crore(c.parsed.x) } } } }) });
+            }
+          },
+          pieOf('Department share', '% of \u20b9 outstanding', 'dept'),
+          pieOf('Fleet type share', 'top 9 + others', 'fleet'),
+          {
+            title: 'EMI schedule \u2014 ' + (PERIOD ? PERIOD.label : ''), sub: '\u20b9 due by day of month', height: 320, render(cv) {
+              const m = new Map();
+              view.filter(r => r.dueNow && r.emiDay >= 1 && r.emiDay <= 31)
+                .forEach(r => m.set(r.emiDay, (m.get(r.emiDay) || 0) + r.emiAmt));
+              const days = [...m.keys()].sort((a, b) => a - b);
+              return new Chart(cv, { type: 'bar', data: { labels: days.map(d => String(d)), datasets: [{ data: days.map(d => Math.round(m.get(d))), backgroundColor: '#2f6db0', borderRadius: 4 }] }, options: opts({ scales: { y: crTick, x: { title: { display: true, text: 'EMI day' } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => 'Day ' + c.label + ': ' + crore(c.parsed.y) } } } }) });
+            }
+          },
+          {
+            title: 'Top 12 fleet types by outstanding', sub: '\u20b9 principal owed', height: 360, render(cv) {
+              const e = grp('fleet', 'osBal').sort((a, b) => b.v - a.v).slice(0, 12);
+              return new Chart(cv, { type: 'bar', data: { labels: e.map(x => x.lab.length > 26 ? x.lab.slice(0, 25) + '\u2026' : x.lab), datasets: [{ data: e.map(x => Math.round(x.v)), backgroundColor: '#7c5cbf', borderRadius: 4 }] }, options: opts({ indexAxis: 'y', scales: { x: crTick, y: { ticks: { font: { size: 9.5 } } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => crore(c.parsed.x) } } } }) });
+            }
+          },
+          {
+            title: 'Repayment progress', sub: '% repaid vs outstanding \u2014 each point a loan', height: 330, render(cv) {
+              const pts = view.filter(r => r.loanAmt > 0).map(r => ({ x: +(r.pctRepaid * 100).toFixed(2), y: Math.round(r.osBal), lab: r.assetNew || r.loanNo || r.bank }));
+              return new Chart(cv, { type: 'scatter', data: { datasets: [{ data: pts, backgroundColor: 'rgba(47,109,176,.55)', pointRadius: 4 }] }, options: opts({ scales: { x: { title: { display: true, text: '% repaid' }, max: 100, ticks: { callback: v => v + '%' } }, y: { title: { display: true, text: '\u20b9 outstanding' }, ...crTick } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => c.raw.lab + ': ' + c.raw.x + '% repaid, ' + crore(c.raw.y) + ' left' } } } }) });
+            }
+          }
+        ];
+      }
+
+      const columns = [
+        { key: '_sr', label: 'Sr No', type: 'sr' },
+        { key: 'bank', label: 'Bank Name', type: 'text' }, { key: 'status', label: 'Status', type: 'text' },
+        { key: 'dept', label: 'Department', type: 'text' }, { key: 'fleet', label: 'Fleet Type', type: 'text' },
+        { key: 'assetOld', label: 'Assets Code (Old)', type: 'text' }, { key: 'assetNew', label: 'New Asset Code', type: 'text' },
+        { key: 'make', label: 'Make', type: 'text' }, { key: 'model', label: 'Model', type: 'text' },
+        { key: 'yom', label: 'YOM', type: 'text' }, { key: 'chassis', label: 'Chassis No', type: 'text' },
+        { key: 'loanNo', label: 'Loan Number', type: 'text' },
+        { key: 'loanAmt', label: 'Loan Amount', type: 'num2' }, { key: 'emiAmt', label: 'EMI Amount', type: 'num2' },
+        { key: 'emiDay', label: 'EMI Date', type: 'int' }, { key: 'acct', label: 'Bank Account', type: 'text' },
+        { key: 'start', label: 'Start Date', type: 'date' }, { key: 'end', label: 'End Date', type: 'date' },
+        { key: 'nEmi', label: 'No. of EMIs', type: 'int' }, { key: 'paidDate', label: 'EMI Paid Date', type: 'date' },
+        { key: 'emiPaid', label: 'EMIs Paid', type: 'int' }, { key: 'emiBal', label: 'EMIs Left', type: 'int' },
+        { key: 'osBal', label: 'Loan Outstanding', type: 'num2' }, { key: 'repaid', label: 'Amount Repaid', type: 'num2' },
+        { key: 'pctRepaid', label: '% Repaid', type: 'util' },
+        { key: 'balDays', label: 'Balance Days', type: 'int' }, { key: 'band', label: 'Balance Days Band', type: 'text' },
+        { key: 'dueLabel', label: 'EMI Due?', type: 'text' }, { key: 'emiDueAmt', label: 'EMI Due Amount', type: 'num2' }
+      ];
+      const tableColumns = columns.map(c => ({
+        key: c.key, label: c.label,
+        fmt: c.type === 'sr' ? 'sr' : c.type === 'num2' ? 'num2' : c.type === 'int' ? 'int'
+          : c.type === 'util' ? 'util' : c.type === 'date' ? 'date' : 'text'
+      }));
+      const filters = [
+        { key: 'bank', label: 'Bank / Lender', multi: true }, { key: 'status', label: 'Status', multi: true },
+        { key: 'band', label: 'Balance Days Band', multi: true }, { key: 'dept', label: 'Department', multi: true },
+        { key: 'fleet', label: 'Fleet Type', multi: true }, { key: 'make', label: 'Make', multi: true },
+        { key: 'acct', label: 'Bank Account', multi: true }, { key: 'dueLabel', label: 'EMI Due?', multi: true },
+        { key: 'yom', label: 'YOM', multi: true, sort: 'year' },
+        { key: 'osBal', label: 'Outstanding (\u20b9)', type: 'range' },
+        { key: 'pctRepaid', label: '% Repaid', type: 'range' },
+        { key: 'day', label: 'Loan end date (calendar)', type: 'calendar', from: 'end', to: 'end' }
+      ];
+
+      /* ---------------- Excel export: all five sheets ---------------- */
+      const NUM2 = '#,##,##0.00', INT0 = '#,##,##0', PCT = '0.00%', DT = 'dd-mmm-yyyy';
+      async function exportExcel(fileName) {
+        const data = (typeof VIEW !== 'undefined' && Array.isArray(VIEW)) ? VIEW : RAW;
+        const wb = new ExcelJS.Workbook(); wb.creator = COMPANY.name; wb.created = new Date();
+        const HEAD = 'FF0E2A43', THIN = { style: 'thin', color: { argb: 'FFBFC8D4' } };
+        const bd = { top: THIN, left: THIN, bottom: THIN, right: THIN };
+        const ALT = 'FFF6F9FC', TOTBG = 'FFDCE6F4', SECT = 'FF12314F';
+        const hC = (c, t) => { c.value = t; c.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10.5, name: 'Calibri' }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEAD } }; c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }; c.border = bd; };
+        const tC = (c, v, o) => { c.value = v; c.border = bd; c.font = { size: 10.5, name: 'Calibri', bold: !!(o && o.bold) }; c.alignment = { horizontal: 'left' }; if (o && o.fill) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: o.fill } }; };
+        const nC = (c, v, o) => { c.value = (v === null || v === undefined) ? null : v; c.numFmt = (o && o.fmt) || NUM2; c.border = bd; c.font = { size: 10.5, name: 'Calibri', bold: !!(o && o.bold) }; c.alignment = { horizontal: 'right' }; if (o && o.fill) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: o.fill } }; };
+        const dC = (c, v, o) => { const d = toDate(v); c.value = (d instanceof Date && !isNaN(d)) ? new Date(d.getTime() - d.getTimezoneOffset() * 60000) : ''; c.numFmt = DT; c.border = bd; c.font = { size: 10.5, name: 'Calibri' }; c.alignment = { horizontal: 'center' }; if (o && o.fill) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: o.fill } }; };
+        const sect = (ws, a, t) => { const c = ws.getCell(a); c.value = t; c.font = { bold: true, size: 11.5, name: 'Calibri', color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SECT } }; };
+        const title = (ws, a, t, sz) => { const c = ws.getCell(a); c.value = t; c.font = { bold: true, size: sz || 14, name: 'Calibri', color: { argb: 'FF0E2A43' } }; };
+
+        const S = (arr, k) => arr.reduce((s, x) => s + (+x[k] || 0), 0);
+        const loanT = S(data, 'loanAmt'), osT = S(data, 'osBal'), repT = loanT - osT, emiT = S(data, 'emiAmt');
+        const dueRows = data.filter(r => r.dueNow);
+        const grpBy = (arr, key) => {
+          const m = new Map();
+          arr.forEach(r => {
+            const u = upk(r[key]) || '\u2014';
+            let g = m.get(u); if (!g) { g = { lab: (T(r[key]) || '\u2014'), n: 0, loan: 0, os: 0, emi: 0, bal: 0, due: 0, dueAmt: 0 }; m.set(u, g); }
+            g.n++; g.loan += r.loanAmt; g.os += r.osBal; g.emi += r.emiAmt; g.bal += r.emiBal;
+            if (r.dueNow) { g.due++; g.dueAmt += r.emiAmt; }
+          });
+          return [...m.values()];
+        };
+        const byOs = (a, b) => b.os - a.os;
+        const pLabel = PERIOD ? PERIOD.label : '';
+
+        /* ===== 1. Loan Dashboard ===== */
+        const ws1 = wb.addWorksheet('Loan Dashboard', { views: [{ showGridLines: false }] });
+        title(ws1, 'B1', 'LOAN PORTFOLIO DASHBOARD');
+        { const c = ws1.getCell('B2'); c.value = "Source: '" + (MASTER.name || 'Sandeep Woring') + "' sheet"; c.font = { size: 10, italic: true, name: 'Calibri', color: { argb: 'FF5A6B7B' } }; }
+        ['Total Loans', 'Total Loan Amount', 'Total Outstanding Bal', 'Amount Repaid', '% Repaid', 'No. of Lenders']
+          .forEach((t, i) => hC(ws1.getRow(4).getCell(3 + i), t));
+        {
+          const r = ws1.getRow(5);
+          nC(r.getCell(3), data.length, { fmt: INT0 }); nC(r.getCell(4), loanT); nC(r.getCell(5), osT);
+          nC(r.getCell(6), repT); nC(r.getCell(7), loanT ? repT / loanT : 0, { fmt: PCT });
+          nC(r.getCell(8), new Set(data.map(x => upk(x.bank)).filter(Boolean)).size, { fmt: INT0 });
+        }
+        // status block
+        sect(ws1, 'B7', 'STATUS-WISE SUMMARY');
+        ['Status', 'No. of Loans', 'Total Loan Amount', 'Total Outstanding Bal', 'Amount Repaid', '% Repaid', 'EMI Amount (Monthly)']
+          .forEach((t, i) => hC(ws1.getRow(8).getCell(2 + i), t));
+        const stat = grpBy(data, 'status').sort((a, b) => b.loan - a.loan);
+        let rr = 9;
+        stat.forEach((g, i) => {
+          const r = ws1.getRow(rr), fill = i % 2 ? ALT : null;
+          tC(r.getCell(2), g.lab, { fill }); nC(r.getCell(3), g.n, { fill, fmt: INT0 });
+          nC(r.getCell(4), g.loan, { fill }); nC(r.getCell(5), g.os, { fill }); nC(r.getCell(6), g.loan - g.os, { fill });
+          nC(r.getCell(7), g.loan ? (g.loan - g.os) / g.loan : 0, { fill, fmt: PCT }); nC(r.getCell(8), g.emi, { fill }); rr++;
+        });
+        {
+          const r = ws1.getRow(rr); tC(r.getCell(2), 'Total', { bold: true, fill: TOTBG });
+          nC(r.getCell(3), data.length, { bold: true, fill: TOTBG, fmt: INT0 }); nC(r.getCell(4), loanT, { bold: true, fill: TOTBG });
+          nC(r.getCell(5), osT, { bold: true, fill: TOTBG }); nC(r.getCell(6), repT, { bold: true, fill: TOTBG });
+          nC(r.getCell(7), loanT ? repT / loanT : 0, { bold: true, fill: TOTBG, fmt: PCT }); nC(r.getCell(8), emiT, { bold: true, fill: TOTBG });
+        }
+        // bank block (left) + department block (right)
+        sect(ws1, 'B15', '1. BANK-WISE SUMMARY'); sect(ws1, 'J15', '2. DEPARTMENT-WISE SUMMARY');
+        ['Bank Name', 'No. of Loans', 'Loan Amount', 'Outstanding Bal', '% of O/S', '% Repaid', 'EMI Amount (Monthly)']
+          .forEach((t, i) => hC(ws1.getRow(16).getCell(2 + i), t));
+        ['Department', 'No. of Loans', 'Loan Amount', 'Outstanding Bal', '% of O/S', '% Repaid']
+          .forEach((t, i) => hC(ws1.getRow(16).getCell(10 + i), t));
+        const banks = grpBy(data, 'bank').sort(byOs), depts = grpBy(data, 'dept').sort(byOs);
+        banks.forEach((g, i) => {
+          const r = ws1.getRow(17 + i), fill = i % 2 ? ALT : null;
+          tC(r.getCell(2), g.lab, { fill }); nC(r.getCell(3), g.n, { fill, fmt: INT0 }); nC(r.getCell(4), g.loan, { fill });
+          nC(r.getCell(5), g.os, { fill }); nC(r.getCell(6), osT ? g.os / osT : 0, { fill, fmt: PCT });
+          nC(r.getCell(7), g.loan ? (g.loan - g.os) / g.loan : 0, { fill, fmt: PCT }); nC(r.getCell(8), g.emi, { fill });
+        });
+        {
+          const r = ws1.getRow(17 + banks.length); tC(r.getCell(2), 'Total', { bold: true, fill: TOTBG });
+          nC(r.getCell(3), data.length, { bold: true, fill: TOTBG, fmt: INT0 }); nC(r.getCell(4), loanT, { bold: true, fill: TOTBG });
+          nC(r.getCell(5), osT, { bold: true, fill: TOTBG }); nC(r.getCell(6), osT ? 1 : 0, { bold: true, fill: TOTBG, fmt: PCT });
+          nC(r.getCell(7), loanT ? repT / loanT : 0, { bold: true, fill: TOTBG, fmt: PCT }); nC(r.getCell(8), emiT, { bold: true, fill: TOTBG });
+        }
+        depts.forEach((g, i) => {
+          const r = ws1.getRow(17 + i), fill = i % 2 ? ALT : null;
+          tC(r.getCell(10), g.lab, { fill }); nC(r.getCell(11), g.n, { fill, fmt: INT0 }); nC(r.getCell(12), g.loan, { fill });
+          nC(r.getCell(13), g.os, { fill }); nC(r.getCell(14), osT ? g.os / osT : 0, { fill, fmt: PCT });
+          nC(r.getCell(15), g.loan ? (g.loan - g.os) / g.loan : 0, { fill, fmt: PCT });
+        });
+        {
+          const r = ws1.getRow(17 + depts.length); tC(r.getCell(10), 'Total', { bold: true, fill: TOTBG });
+          nC(r.getCell(11), data.length, { bold: true, fill: TOTBG, fmt: INT0 }); nC(r.getCell(12), loanT, { bold: true, fill: TOTBG });
+          nC(r.getCell(13), osT, { bold: true, fill: TOTBG }); nC(r.getCell(14), osT ? 1 : 0, { bold: true, fill: TOTBG, fmt: PCT });
+          nC(r.getCell(15), loanT ? repT / loanT : 0, { bold: true, fill: TOTBG, fmt: PCT });
+        }
+        // fleet block under the department block
+        const fBase = 17 + Math.max(banks.length, depts.length) + 3;
+        sect(ws1, 'J' + fBase, '3. FLEET TYPE-WISE SUMMARY');
+        ['Fleet Type', 'No. of Loans', 'Loan Amount', 'Outstanding Bal', '% of O/S', '% Repaid']
+          .forEach((t, i) => hC(ws1.getRow(fBase + 1).getCell(10 + i), t));
+        const fleets = grpBy(data, 'fleet').sort(byOs);
+        fleets.forEach((g, i) => {
+          const r = ws1.getRow(fBase + 2 + i), fill = i % 2 ? ALT : null;
+          tC(r.getCell(10), g.lab, { fill }); nC(r.getCell(11), g.n, { fill, fmt: INT0 }); nC(r.getCell(12), g.loan, { fill });
+          nC(r.getCell(13), g.os, { fill }); nC(r.getCell(14), osT ? g.os / osT : 0, { fill, fmt: PCT });
+          nC(r.getCell(15), g.loan ? (g.loan - g.os) / g.loan : 0, { fill, fmt: PCT });
+        });
+        {
+          const r = ws1.getRow(fBase + 2 + fleets.length); tC(r.getCell(10), 'Total', { bold: true, fill: TOTBG });
+          nC(r.getCell(11), data.length, { bold: true, fill: TOTBG, fmt: INT0 }); nC(r.getCell(12), loanT, { bold: true, fill: TOTBG });
+          nC(r.getCell(13), osT, { bold: true, fill: TOTBG }); nC(r.getCell(14), osT ? 1 : 0, { bold: true, fill: TOTBG, fmt: PCT });
+          nC(r.getCell(15), loanT ? repT / loanT : 0, { bold: true, fill: TOTBG, fmt: PCT });
+        }
+        ws1.getColumn(2).width = 34; for (let c = 3; c <= 8; c++) ws1.getColumn(c).width = 20;
+        ws1.getColumn(10).width = 30; for (let c = 11; c <= 15; c++) ws1.getColumn(c).width = 19;
+
+        /* ===== 2. Balance Days Band Report ===== */
+        const ws2 = wb.addWorksheet('Balance Days Band Report', { views: [{ showGridLines: false }] });
+        title(ws2, 'B1', 'LOAN BALANCE DAYS BAND REPORT');
+        { const c = ws2.getCell('B2'); c.value = "Source: '" + (MASTER.name || 'Sandeep Woring') + "' sheet \u00b7 Balance Days = End Date \u2212 EMI Paid Date"; c.font = { size: 10, italic: true, name: 'Calibri', color: { argb: 'FF5A6B7B' } }; }
+        ['No. of Loans', 'Loan Amount', 'Balance O/S', 'Amount Paid', '% Paid', 'Monthly EMI']
+          .forEach((t, i) => hC(ws2.getRow(4).getCell(5 + i), t));
+        {
+          const r = ws2.getRow(5);
+          nC(r.getCell(5), data.length, { fmt: INT0 }); nC(r.getCell(6), loanT); nC(r.getCell(7), osT);
+          nC(r.getCell(8), repT); nC(r.getCell(9), loanT ? repT / loanT : 0, { fmt: PCT }); nC(r.getCell(10), emiT);
+        }
+        sect(ws2, 'B9', '1. BALANCE DAYS BAND SUMMARY');
+        ['Balance Days Band', 'Min Days', 'Max Days', 'No. of Loans', 'Loan Amount', 'Balance O/S (Upcoming)',
+          'Amount Paid', '% Paid', 'Monthly EMI', 'EMIs Left', '% of Total O/S']
+          .forEach((t, i) => hC(ws2.getRow(10).getCell(2 + i), t));
+        BANDS.forEach((b, i) => {
+          const sub = data.filter(x => x.band === b.label), r = ws2.getRow(11 + i), fill = i % 2 ? ALT : null;
+          const l = S(sub, 'loanAmt'), o = S(sub, 'osBal');
+          tC(r.getCell(2), b.label, { fill }); nC(r.getCell(3), b.lo, { fill, fmt: INT0 }); nC(r.getCell(4), b.hi, { fill, fmt: INT0 });
+          nC(r.getCell(5), sub.length, { fill, fmt: INT0 }); nC(r.getCell(6), l, { fill }); nC(r.getCell(7), o, { fill });
+          nC(r.getCell(8), l - o, { fill }); nC(r.getCell(9), l ? (l - o) / l : 0, { fill, fmt: PCT });
+          nC(r.getCell(10), S(sub, 'emiAmt'), { fill }); nC(r.getCell(11), S(sub, 'emiBal'), { fill, fmt: INT0 });
+          nC(r.getCell(12), osT ? o / osT : 0, { fill, fmt: PCT });
+        });
+        {
+          const r = ws2.getRow(11 + BANDS.length); tC(r.getCell(2), 'Total', { bold: true, fill: TOTBG });
+          [3, 4].forEach(c => tC(r.getCell(c), '', { bold: true, fill: TOTBG }));
+          nC(r.getCell(5), data.length, { bold: true, fill: TOTBG, fmt: INT0 }); nC(r.getCell(6), loanT, { bold: true, fill: TOTBG });
+          nC(r.getCell(7), osT, { bold: true, fill: TOTBG }); nC(r.getCell(8), repT, { bold: true, fill: TOTBG });
+          nC(r.getCell(9), loanT ? repT / loanT : 0, { bold: true, fill: TOTBG, fmt: PCT });
+          nC(r.getCell(10), emiT, { bold: true, fill: TOTBG }); nC(r.getCell(11), S(data, 'emiBal'), { bold: true, fill: TOTBG, fmt: INT0 });
+          nC(r.getCell(12), osT ? 1 : 0, { bold: true, fill: TOTBG, fmt: PCT });
+        }
+        // bank x band matrix
+        const mBase = 11 + BANDS.length + 3;
+        sect(ws2, 'B' + mBase, '2. BANK-WISE BALANCE O/S BY BAND');
+        ['Bank Name'].concat(BANDS.map(b => b.label)).concat(['Total O/S'])
+          .forEach((t, i) => hC(ws2.getRow(mBase + 1).getCell(2 + i), t));
+        banks.forEach((g, i) => {
+          const sub = data.filter(x => upk(x.bank) === upk(g.lab)), r = ws2.getRow(mBase + 2 + i), fill = i % 2 ? ALT : null;
+          tC(r.getCell(2), g.lab, { fill });
+          BANDS.forEach((b, j) => nC(r.getCell(3 + j), sub.filter(x => x.band === b.label).reduce((s, x) => s + x.osBal, 0), { fill }));
+          nC(r.getCell(3 + BANDS.length), g.os, { fill });
+        });
+        {
+          const r = ws2.getRow(mBase + 2 + banks.length); tC(r.getCell(2), 'Total', { bold: true, fill: TOTBG });
+          BANDS.forEach((b, j) => nC(r.getCell(3 + j), data.filter(x => x.band === b.label).reduce((s, x) => s + x.osBal, 0), { bold: true, fill: TOTBG }));
+          nC(r.getCell(3 + BANDS.length), osT, { bold: true, fill: TOTBG });
+        }
+        // loan-wise detail, soonest ending first
+        const dBase = mBase + 2 + banks.length + 3;
+        sect(ws2, 'B' + dBase, '3. LOAN-WISE DETAIL \u2014 soonest ending first');
+        ['Sr.', 'Loan Number', 'Bank Name', 'Asset Code', 'Loan Amount', 'Balance O/S', 'Amount Paid', '% Paid',
+          'EMI Amount', 'End Date', 'Balance Days', 'Balance Days Band', 'EMIs Left']
+          .forEach((t, i) => hC(ws2.getRow(dBase + 1).getCell(2 + i), t));
+        const det = data.slice().sort((a, b) => (a.balDays == null ? 1e9 : a.balDays) - (b.balDays == null ? 1e9 : b.balDays));
+        det.forEach((x, i) => {
+          const r = ws2.getRow(dBase + 2 + i), fill = i % 2 ? ALT : null;
+          nC(r.getCell(2), i + 1, { fill, fmt: INT0 }); tC(r.getCell(3), x.loanNo, { fill }); tC(r.getCell(4), x.bank, { fill });
+          tC(r.getCell(5), x.assetNew || x.assetOld, { fill });
+          nC(r.getCell(6), x.loanAmt, { fill }); nC(r.getCell(7), x.osBal, { fill }); nC(r.getCell(8), x.repaid, { fill });
+          nC(r.getCell(9), x.pctRepaid, { fill, fmt: PCT }); nC(r.getCell(10), x.emiAmt, { fill });
+          dC(r.getCell(11), x.end, { fill }); nC(r.getCell(12), x.balDays, { fill, fmt: INT0 });
+          tC(r.getCell(13), x.band, { fill }); nC(r.getCell(14), x.emiBal, { fill, fmt: INT0 });
+        });
+        ws2.getColumn(2).width = 30; for (let c = 3; c <= 14; c++) ws2.getColumn(c).width = 18;
+
+        /* ===== 3. EMI Due Report ===== */
+        const ws3 = wb.addWorksheet('EMI Due Report', { views: [{ showGridLines: false }] });
+        title(ws3, 'B1', 'LOAN & EMI DUE DASHBOARD \u2014 ' + pLabel);
+        { const c = ws3.getCell('B2'); c.value = "Source: '" + (MASTER.name || 'Sandeep Woring') + "' sheet \u00b7 An EMI is due when the loan has started on or before the month end, has not ended before the month start, and still has EMIs left."; c.font = { size: 10, italic: true, name: 'Calibri', color: { argb: 'FF5A6B7B' } }; }
+        tC(ws3.getRow(4).getCell(2), 'Report Month (start)'); dC(ws3.getRow(4).getCell(3), PERIOD && PERIOD.start);
+        tC(ws3.getRow(5).getCell(2), 'Report Month (end)'); dC(ws3.getRow(5).getCell(3), PERIOD && PERIOD.end);
+        ['Total Loans', 'Loan Amount', 'Outstanding Bal', 'Loan Paid', 'EMIs Due (Report Month)', 'EMI Amount Due']
+          .forEach((t, i) => hC(ws3.getRow(4).getCell(5 + i), t));
+        {
+          const r = ws3.getRow(5);
+          nC(r.getCell(5), data.length, { fmt: INT0 }); nC(r.getCell(6), loanT); nC(r.getCell(7), osT); nC(r.getCell(8), repT);
+          nC(r.getCell(9), dueRows.length, { fmt: INT0 }); nC(r.getCell(10), S(dueRows, 'emiAmt'));
+        }
+        sect(ws3, 'B10', '1. BANK ACCOUNT-WISE LOAN & EMI SUMMARY');
+        ['Bank Account', 'No. of Loans', 'Loan Amount', 'Outstanding Bal', 'Loan Paid', '% Paid', 'EMIs Due (Report Month)', 'EMI Amount Due']
+          .forEach((t, i) => hC(ws3.getRow(11).getCell(2 + i), t));
+        const accts = grpBy(data, 'acct').sort((a, b) => b.loan - a.loan);
+        accts.forEach((g, i) => {
+          const r = ws3.getRow(12 + i), fill = i % 2 ? ALT : null;
+          tC(r.getCell(2), g.lab, { fill }); nC(r.getCell(3), g.n, { fill, fmt: INT0 }); nC(r.getCell(4), g.loan, { fill });
+          nC(r.getCell(5), g.os, { fill }); nC(r.getCell(6), g.loan - g.os, { fill });
+          nC(r.getCell(7), g.loan ? (g.loan - g.os) / g.loan : 0, { fill, fmt: PCT });
+          nC(r.getCell(8), g.due, { fill, fmt: INT0 }); nC(r.getCell(9), g.dueAmt, { fill });
+        });
+        {
+          const r = ws3.getRow(12 + accts.length); tC(r.getCell(2), 'Total', { bold: true, fill: TOTBG });
+          nC(r.getCell(3), data.length, { bold: true, fill: TOTBG, fmt: INT0 }); nC(r.getCell(4), loanT, { bold: true, fill: TOTBG });
+          nC(r.getCell(5), osT, { bold: true, fill: TOTBG }); nC(r.getCell(6), repT, { bold: true, fill: TOTBG });
+          nC(r.getCell(7), loanT ? repT / loanT : 0, { bold: true, fill: TOTBG, fmt: PCT });
+          nC(r.getCell(8), dueRows.length, { bold: true, fill: TOTBG, fmt: INT0 }); nC(r.getCell(9), S(dueRows, 'emiAmt'), { bold: true, fill: TOTBG });
+        }
+        // EMI payment schedule by day x account
+        const sBase = 12 + accts.length + 3;
+        sect(ws3, 'B' + sBase, '2. EMI PAYMENT SCHEDULE \u2014 ' + pLabel);
+        ['EMI Day', 'Due Date'].concat(accts.map(a => a.lab)).concat(['Total'])
+          .forEach((t, i) => hC(ws3.getRow(sBase + 1).getCell(2 + i), t));
+        const days = [...new Set(dueRows.filter(r => r.emiDay >= 1 && r.emiDay <= 31).map(r => r.emiDay))].sort((a, b) => a - b);
+        days.forEach((d, i) => {
+          const r = ws3.getRow(sBase + 2 + i), fill = i % 2 ? ALT : null;
+          nC(r.getCell(2), d, { fill, fmt: INT0 });
+          dC(r.getCell(3), PERIOD ? new Date(PERIOD.start.getFullYear(), PERIOD.start.getMonth(), Math.min(d, PERIOD.end.getDate())) : null, { fill });
+          let tot = 0;
+          accts.forEach((a, j) => {
+            const v = dueRows.filter(x => x.emiDay === d && upk(x.acct) === upk(a.lab)).reduce((s, x) => s + x.emiAmt, 0);
+            nC(r.getCell(4 + j), v, { fill }); tot += v;
+          });
+          nC(r.getCell(4 + accts.length), tot, { fill });
+        });
+        {
+          const r = ws3.getRow(sBase + 2 + days.length);
+          tC(r.getCell(2), 'Total', { bold: true, fill: TOTBG }); tC(r.getCell(3), '', { bold: true, fill: TOTBG });
+          accts.forEach((a, j) => nC(r.getCell(4 + j), a.dueAmt, { bold: true, fill: TOTBG }));
+          nC(r.getCell(4 + accts.length), S(dueRows, 'emiAmt'), { bold: true, fill: TOTBG });
+        }
+        // loan-wise detail for the month
+        const eBase = sBase + 2 + days.length + 3;
+        sect(ws3, 'B' + eBase, '3. LOAN-WISE DETAIL \u2014 due in ' + pLabel);
+        ['Sr.', 'Loan Number', 'Bank Name (Lender)', 'Bank Account', 'Loan Amount', 'Outstanding Bal', 'Loan Paid',
+          '% Paid', 'EMI Amount', 'EMI Due Date', 'EMIs Left', 'EMI Due?']
+          .forEach((t, i) => hC(ws3.getRow(eBase + 1).getCell(2 + i), t));
+        const eDet = data.slice().sort((a, b) => (b.dueNow - a.dueNow) || ((a.emiDay || 99) - (b.emiDay || 99)) || (b.emiAmt - a.emiAmt));
+        eDet.forEach((x, i) => {
+          const r = ws3.getRow(eBase + 2 + i), fill = i % 2 ? ALT : null;
+          nC(r.getCell(2), i + 1, { fill, fmt: INT0 }); tC(r.getCell(3), x.loanNo, { fill }); tC(r.getCell(4), x.bank, { fill });
+          tC(r.getCell(5), x.acct, { fill }); nC(r.getCell(6), x.loanAmt, { fill }); nC(r.getCell(7), x.osBal, { fill });
+          nC(r.getCell(8), x.repaid, { fill }); nC(r.getCell(9), x.pctRepaid, { fill, fmt: PCT });
+          nC(r.getCell(10), x.emiAmt, { fill }); dC(r.getCell(11), x.dueDate, { fill });
+          nC(r.getCell(12), x.emiBal, { fill, fmt: INT0 }); tC(r.getCell(13), x.dueLabel, { fill });
+        });
+        ws3.getColumn(2).width = 32; ws3.getColumn(3).width = 24; for (let c = 4; c <= 14; c++) ws3.getColumn(c).width = 20;
+
+        /* ===== 4. Sandeep Woring (verbatim echo of the uploaded sheet) ===== */
+        const ws4 = wb.addWorksheet(MASTER.name || 'Sandeep Woring', { views: [{ state: 'frozen', ySplit: 1 }] });
+        const MH = MASTER.headers.length ? MASTER.headers : columns.filter(c => c.type !== 'sr').map(c => c.label);
+        MH.forEach((t, i) => hC(ws4.getRow(1).getCell(i + 1), t));
+        const keep = new Set(data.map(x => x._m));
+        const mrows = [];
+        MASTER.rows.forEach(src => {
+          if (!keep.has(src)) return;                       // follow the dashboard filter
+          const row = new Array(MH.length);
+          for (let c = 0; c < MH.length; c++) {
+            let v = src[c];
+            if (v instanceof Date) v = new Date(v.getTime() - v.getTimezoneOffset() * 60000);
+            row[c] = (v === undefined || v === '') ? null : v;
+          }
+          mrows.push(row);
+        });
+        if (mrows.length) ws4.addRows(mrows);
+        MH.forEach((h, i) => {
+          const col = ws4.getColumn(i + 1), n = norm(h);
+          col.width = Math.min(Math.max(String(h).length + 2, 12), 30);
+          if (/date/.test(n) && !/emidate/.test(n)) col.numFmt = DT;
+          else if (/amt|amount|bal|outstanding/.test(n)) col.numFmt = NUM2;
+        });
+        ws4.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: MH.length } };
+
+        /* ===== 5. AFL LIST (supporting asset list, carried through) ===== */
+        if (AFL.headers.length) {
+          const ws5 = wb.addWorksheet(AFL.name || 'AFL LIST ', { views: [{ state: 'frozen', ySplit: 1 }] });
+          AFL.headers.forEach((t, i) => hC(ws5.getRow(1).getCell(i + 1), t));
+          const arows = AFL.rows.map(src => {
+            const row = new Array(AFL.headers.length);
+            for (let c = 0; c < AFL.headers.length; c++) {
+              let v = src[c];
+              if (v instanceof Date) v = new Date(v.getTime() - v.getTimezoneOffset() * 60000);
+              row[c] = (v === undefined || v === '') ? null : v;
+            }
+            return row;
+          });
+          if (arows.length) ws5.addRows(arows);
+          AFL.headers.forEach((h, i) => { ws5.getColumn(i + 1).width = Math.min(Math.max(String(h).length + 2, 12), 34); });
+          ws5.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: AFL.headers.length } };
+        }
+
+        const buf = await wb.xlsx.writeBuffer();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+        a.download = fileName; a.click();
+      }
+
+      return {
+        meta: {
+          name: 'Fleet List (Loan Status)',
+          tagline: 'Asset finance \u2014 loan outstanding, EMI due and remaining tenure by lender, department and fleet',
+          icon: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V8l7-5 7 5v13"/><path d="M9 21v-6h6v6"/></svg>'
+        },
+        hint: 'Upload the loan working file (the <b>Sandeep Woring</b> sheet, plus <b>AFL LIST</b> if present). <b>Balance Days = End Date \u2212 EMI Paid Date</b>, and an EMI counts as due when the loan started on or before the month end, has not ended before the month start, and still has EMIs left. Filter by lender, status, balance-days band, department, fleet or account. The Excel export rebuilds <b>Loan Dashboard</b>, <b>Balance Days Band Report</b>, <b>EMI Due Report</b>, <b>Sandeep Woring</b> and <b>AFL LIST</b>.',
+        sheetName: 'Fleet Loan Status', exportName: 'VisionInfra-Fleet-Loan-Status',
+        process, kpis, charts, columns, tableColumns, filters, cascadeFilters: true,
+        searchKeys: ['bank', 'status', 'dept', 'fleet', 'make', 'model', 'assetOld', 'assetNew', 'chassis', 'loanNo', 'acct', 'band'],
         exportExcel
       };
     })();
