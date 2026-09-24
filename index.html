@@ -9003,6 +9003,8 @@
            392 EMIs due and 131,099,909.35, exactly as the reference shows.
          Report month   = the month AFTER the latest EMI PAID DATE in the data
                           ('Report Month auto = next month' in the reference).
+       The EMI-due figures feed the dashboard KPIs and the EMI schedule chart;
+       the export carries four sheets and no separate EMI Due tab.
        The AFL LIST sheet is a supporting asset list (the assets behind the single
        Axis Finance bulk loan); it is not derivable, so it is carried through from
        the upload verbatim. */
@@ -9251,10 +9253,8 @@
       const filters = [
         { key: 'bank', label: 'Bank / Lender', multi: true }, { key: 'status', label: 'Status', multi: true },
         { key: 'band', label: 'Balance Days Band', multi: true }, { key: 'dept', label: 'Department', multi: true },
-        { key: 'fleet', label: 'Fleet Type', multi: true }, { key: 'make', label: 'Make', multi: true },
+        { key: 'fleet', label: 'Fleet Type', multi: true },
         { key: 'acct', label: 'Bank Account', multi: true }, { key: 'dueLabel', label: 'EMI Due?', multi: true },
-        { key: 'yom', label: 'YOM', multi: true, sort: 'year' },
-        { key: 'osBal', label: 'Outstanding (\u20b9)', type: 'range' },
         { key: 'pctRepaid', label: '% Repaid', type: 'range' },
         { key: 'day', label: 'Loan end date (calendar)', type: 'calendar', from: 'end', to: 'end' }
       ];
@@ -9439,76 +9439,10 @@
         });
         ws2.getColumn(2).width = 30; for (let c = 3; c <= 14; c++) ws2.getColumn(c).width = 18;
 
-        /* ===== 3. EMI Due Report ===== */
-        const ws3 = wb.addWorksheet('EMI Due Report', { views: [{ showGridLines: false }] });
-        title(ws3, 'B1', 'LOAN & EMI DUE DASHBOARD \u2014 ' + pLabel);
-        { const c = ws3.getCell('B2'); c.value = "Source: '" + (MASTER.name || 'Sandeep Woring') + "' sheet \u00b7 An EMI is due when the loan has started on or before the month end, has not ended before the month start, and still has EMIs left."; c.font = { size: 10, italic: true, name: 'Calibri', color: { argb: 'FF5A6B7B' } }; }
-        tC(ws3.getRow(4).getCell(2), 'Report Month (start)'); dC(ws3.getRow(4).getCell(3), PERIOD && PERIOD.start);
-        tC(ws3.getRow(5).getCell(2), 'Report Month (end)'); dC(ws3.getRow(5).getCell(3), PERIOD && PERIOD.end);
-        ['Total Loans', 'Loan Amount', 'Outstanding Bal', 'Loan Paid', 'EMIs Due (Report Month)', 'EMI Amount Due']
-          .forEach((t, i) => hC(ws3.getRow(4).getCell(5 + i), t));
-        {
-          const r = ws3.getRow(5);
-          nC(r.getCell(5), data.length, { fmt: INT0 }); nC(r.getCell(6), loanT); nC(r.getCell(7), osT); nC(r.getCell(8), repT);
-          nC(r.getCell(9), dueRows.length, { fmt: INT0 }); nC(r.getCell(10), S(dueRows, 'emiAmt'));
-        }
-        sect(ws3, 'B10', '1. BANK ACCOUNT-WISE LOAN & EMI SUMMARY');
-        ['Bank Account', 'No. of Loans', 'Loan Amount', 'Outstanding Bal', 'Loan Paid', '% Paid', 'EMIs Due (Report Month)', 'EMI Amount Due']
-          .forEach((t, i) => hC(ws3.getRow(11).getCell(2 + i), t));
-        const accts = grpBy(data, 'acct').sort((a, b) => b.loan - a.loan);
-        accts.forEach((g, i) => {
-          const r = ws3.getRow(12 + i), fill = i % 2 ? ALT : null;
-          tC(r.getCell(2), g.lab, { fill }); nC(r.getCell(3), g.n, { fill, fmt: INT0 }); nC(r.getCell(4), g.loan, { fill });
-          nC(r.getCell(5), g.os, { fill }); nC(r.getCell(6), g.loan - g.os, { fill });
-          nC(r.getCell(7), g.loan ? (g.loan - g.os) / g.loan : 0, { fill, fmt: PCT });
-          nC(r.getCell(8), g.due, { fill, fmt: INT0 }); nC(r.getCell(9), g.dueAmt, { fill });
-        });
-        {
-          const r = ws3.getRow(12 + accts.length); tC(r.getCell(2), 'Total', { bold: true, fill: TOTBG });
-          nC(r.getCell(3), data.length, { bold: true, fill: TOTBG, fmt: INT0 }); nC(r.getCell(4), loanT, { bold: true, fill: TOTBG });
-          nC(r.getCell(5), osT, { bold: true, fill: TOTBG }); nC(r.getCell(6), repT, { bold: true, fill: TOTBG });
-          nC(r.getCell(7), loanT ? repT / loanT : 0, { bold: true, fill: TOTBG, fmt: PCT });
-          nC(r.getCell(8), dueRows.length, { bold: true, fill: TOTBG, fmt: INT0 }); nC(r.getCell(9), S(dueRows, 'emiAmt'), { bold: true, fill: TOTBG });
-        }
-        // EMI payment schedule by day x account
-        const sBase = 12 + accts.length + 3;
-        sect(ws3, 'B' + sBase, '2. EMI PAYMENT SCHEDULE \u2014 ' + pLabel);
-        ['EMI Day', 'Due Date'].concat(accts.map(a => a.lab)).concat(['Total'])
-          .forEach((t, i) => hC(ws3.getRow(sBase + 1).getCell(2 + i), t));
-        const days = [...new Set(dueRows.filter(r => r.emiDay >= 1 && r.emiDay <= 31).map(r => r.emiDay))].sort((a, b) => a - b);
-        days.forEach((d, i) => {
-          const r = ws3.getRow(sBase + 2 + i), fill = i % 2 ? ALT : null;
-          nC(r.getCell(2), d, { fill, fmt: INT0 });
-          dC(r.getCell(3), PERIOD ? new Date(PERIOD.start.getFullYear(), PERIOD.start.getMonth(), Math.min(d, PERIOD.end.getDate())) : null, { fill });
-          let tot = 0;
-          accts.forEach((a, j) => {
-            const v = dueRows.filter(x => x.emiDay === d && upk(x.acct) === upk(a.lab)).reduce((s, x) => s + x.emiAmt, 0);
-            nC(r.getCell(4 + j), v, { fill }); tot += v;
-          });
-          nC(r.getCell(4 + accts.length), tot, { fill });
-        });
-        {
-          const r = ws3.getRow(sBase + 2 + days.length);
-          tC(r.getCell(2), 'Total', { bold: true, fill: TOTBG }); tC(r.getCell(3), '', { bold: true, fill: TOTBG });
-          accts.forEach((a, j) => nC(r.getCell(4 + j), a.dueAmt, { bold: true, fill: TOTBG }));
-          nC(r.getCell(4 + accts.length), S(dueRows, 'emiAmt'), { bold: true, fill: TOTBG });
-        }
-        // loan-wise detail for the month
-        const eBase = sBase + 2 + days.length + 3;
-        sect(ws3, 'B' + eBase, '3. LOAN-WISE DETAIL \u2014 due in ' + pLabel);
-        ['Sr.', 'Loan Number', 'Bank Name (Lender)', 'Bank Account', 'Loan Amount', 'Outstanding Bal', 'Loan Paid',
-          '% Paid', 'EMI Amount', 'EMI Due Date', 'EMIs Left', 'EMI Due?']
-          .forEach((t, i) => hC(ws3.getRow(eBase + 1).getCell(2 + i), t));
-        const eDet = data.slice().sort((a, b) => (b.dueNow - a.dueNow) || ((a.emiDay || 99) - (b.emiDay || 99)) || (b.emiAmt - a.emiAmt));
-        eDet.forEach((x, i) => {
-          const r = ws3.getRow(eBase + 2 + i), fill = i % 2 ? ALT : null;
-          nC(r.getCell(2), i + 1, { fill, fmt: INT0 }); tC(r.getCell(3), x.loanNo, { fill }); tC(r.getCell(4), x.bank, { fill });
-          tC(r.getCell(5), x.acct, { fill }); nC(r.getCell(6), x.loanAmt, { fill }); nC(r.getCell(7), x.osBal, { fill });
-          nC(r.getCell(8), x.repaid, { fill }); nC(r.getCell(9), x.pctRepaid, { fill, fmt: PCT });
-          nC(r.getCell(10), x.emiAmt, { fill }); dC(r.getCell(11), x.dueDate, { fill });
-          nC(r.getCell(12), x.emiBal, { fill, fmt: INT0 }); tC(r.getCell(13), x.dueLabel, { fill });
-        });
-        ws3.getColumn(2).width = 32; ws3.getColumn(3).width = 24; for (let c = 4; c <= 14; c++) ws3.getColumn(c).width = 20;
+        /* The EMI Due Report sheet is intentionally not exported: the workbook ships
+           four sheets - Loan Dashboard, Balance Days Band Report, Sandeep Woring and
+           AFL LIST. The EMI-due figures still drive the dashboard KPIs and the EMI
+           schedule chart, they are simply not written as their own tab. */
 
         /* ===== 4. Sandeep Woring (verbatim echo of the uploaded sheet) ===== */
         const ws4 = wb.addWorksheet(MASTER.name || 'Sandeep Woring', { views: [{ state: 'frozen', ySplit: 1 }] });
@@ -9565,7 +9499,7 @@
           tagline: 'Asset finance \u2014 loan outstanding, EMI due and remaining tenure by lender, department and fleet',
           icon: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V8l7-5 7 5v13"/><path d="M9 21v-6h6v6"/></svg>'
         },
-        hint: 'Upload the loan working file (the <b>Sandeep Woring</b> sheet, plus <b>AFL LIST</b> if present). <b>Balance Days = End Date \u2212 EMI Paid Date</b>, and an EMI counts as due when the loan started on or before the month end, has not ended before the month start, and still has EMIs left. Filter by lender, status, balance-days band, department, fleet or account. The Excel export rebuilds <b>Loan Dashboard</b>, <b>Balance Days Band Report</b>, <b>EMI Due Report</b>, <b>Sandeep Woring</b> and <b>AFL LIST</b>.',
+        hint: 'Upload the loan working file (the <b>Sandeep Woring</b> sheet, plus <b>AFL LIST</b> if present). <b>Balance Days = End Date \u2212 EMI Paid Date</b>, and an EMI counts as due when the loan started on or before the month end, has not ended before the month start, and still has EMIs left. Filter by lender, status, balance-days band, department, fleet or account. The Excel export rebuilds <b>Loan Dashboard</b>, <b>Balance Days Band Report</b>, <b>Sandeep Woring</b> and <b>AFL LIST</b>.',
         sheetName: 'Fleet Loan Status', exportName: 'VisionInfra-Fleet-Loan-Status',
         process, kpis, charts, columns, tableColumns, filters, cascadeFilters: true,
         searchKeys: ['bank', 'status', 'dept', 'fleet', 'make', 'model', 'assetOld', 'assetNew', 'chassis', 'loanNo', 'acct', 'band'],
