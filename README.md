@@ -1,6 +1,3 @@
-<div align="center">
-
-<img src="images/logo.png" alt="Vision Infra Equipment Solutions Ltd" width="120">
 
 # VIESL Report Analyzer
 
