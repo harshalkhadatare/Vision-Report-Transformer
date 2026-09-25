@@ -6807,10 +6807,26 @@
                order (Apr, May, Jun ...).
              - A combination with no rows stays empty; one that nets to zero prints 0.
            Measure is ASSETWISE_INCOME, per the Sales rule used everywhere but R1. */
+        // R6 keeps the pivot's own alphabetical member order for its row labels.
         const wmLabels = (() => {
           const set = new Set(); let hasBlank = false;
           allData.forEach(r => { const v = r.wmLabel || '(blank)'; if (v === '(blank)') hasBlank = true; else set.add(v); });
           const out = [...set].sort((a, b) => a.localeCompare(b));
+          if (hasBlank) out.push('(blank)');
+          return out;
+        })();
+        // R7 lists the same working months across its columns, but in true date order
+        // (Dec-2025 then Feb-2026 ...) rather than alphabetically, so the sheet reads
+        // left-to-right as a timeline. wmKey = year*12 + month, so it sorts correctly
+        // across year boundaries; "(blank)" stays at the end.
+        const wmChrono = (() => {
+          const m = new Map(); let hasBlank = false;
+          allData.forEach(r => {
+            const v = r.wmLabel || '(blank)';
+            if (v === '(blank)' || r.wmKey < 0) { hasBlank = hasBlank || v === '(blank)'; if (v === '(blank)') return; }
+            if (!m.has(v)) m.set(v, r.wmKey);
+          });
+          const out = [...m.entries()].sort((a, b) => a[1] - b[1]).map(x => x[0]);
           if (hasBlank) out.push('(blank)');
           return out;
         })();
@@ -6819,8 +6835,19 @@
           allData.forEach(r => { if (r.invDate) m.set(r.invDate.getMonth(), MONF[r.invDate.getMonth()]); });
           return [...m.entries()].sort((a, b) => a[0] - b[0]).map(x => x[1]);
         })();
-        const wsR6 = wb.addWorksheet('R6', { views: [{ state: 'frozen', ySplit: 1 }] });
+        const wsR6 = wb.addWorksheet('R6', { views: [{ state: 'frozen', ySplit: 2 }] });
         [22].concat(docMonths.map(() => 18)).concat([18]).forEach((w, i) => wsR6.getColumn(i + 1).width = w);
+        // banner across the table, so the sheet explains itself when printed or shared
+        const r6Title = wsR6.addRow(['AS Per working month summery']);
+        wsR6.mergeCells(1, 1, 1, docMonths.length + 2);
+        r6Title.height = 22;
+        {
+          const c = wsR6.getCell(1, 1);
+          c.font = { bold: true, size: 12.5, name: 'Calibri', color: { argb: 'FFFFFFFF' } };
+          c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: TITLEBG } };
+          c.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+          for (let cc = 1; cc <= docMonths.length + 2; cc++) wsR6.getCell(1, cc).border = box(thin);
+        }
         const r6Map = {};
         allData.forEach(r => {
           const rk = r.wmLabel || '(blank)', ck = r.invDate ? MONF[r.invDate.getMonth()] : null;
@@ -6828,8 +6855,8 @@
           (r6Map[rk] = r6Map[rk] || {})[ck] = (r6Map[rk][ck] || 0) + (+r.assetIncome || 0);
         });
         const r6Hdr = ['Working Month', ...docMonths, 'Grand Total'];
-        wsR6.addRow(r6Hdr); styleHeadRow(wsR6, 1, r6Hdr.length);
-        wsR6.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: r6Hdr.length } };
+        wsR6.addRow(r6Hdr); styleHeadRow(wsR6, 2, r6Hdr.length);
+        wsR6.autoFilter = { from: { row: 2, column: 1 }, to: { row: 2, column: r6Hdr.length } };
         const r6ColTot = {}; docMonths.forEach(m => r6ColTot[m] = 0); let r6Grand = 0;
         wmLabels.forEach((wl, ri) => {
           const mm = r6Map[wl] || {};
@@ -6856,7 +6883,7 @@
            Same pivot conventions; the five equipment attributes are taken from the
            first row seen for that code, as an Excel pivot's row labels do. */
         const wsR7 = wb.addWorksheet('R7', { views: [{ state: 'frozen', xSplit: 5, ySplit: 1 }] });
-        [18, 34, 22, 18, 10].concat(wmLabels.map(() => 16)).concat([18]).forEach((w, i) => wsR7.getColumn(i + 1).width = w);
+        [18, 34, 22, 18, 10].concat(wmChrono.map(() => 16)).concat([18]).forEach((w, i) => wsR7.getColumn(i + 1).width = w);
         const r7Map = {}, r7Attr = {};
         allData.forEach(r => {
           const code = r.assetCode || '(blank)', wl = r.wmLabel || '(blank)';
@@ -6868,16 +6895,16 @@
           if (r7Map['(blank)']) keys.push('(blank)');
           return keys;
         })();
-        const r7Hdr = ['EQUIP_CODE', 'EQUIP_DESCR', 'EQUIPMENTTYPE', 'MAKE', 'YOM', ...wmLabels, 'Grand Total'];
+        const r7Hdr = ['EQUIP_CODE', 'EQUIP_DESCR', 'EQUIPMENTTYPE', 'MAKE', 'YOM', ...wmChrono, 'Grand Total'];
         wsR7.addRow(r7Hdr); styleHeadRow(wsR7, 1, r7Hdr.length);
         wsR7.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: r7Hdr.length } };
-        const r7ColTot = {}; wmLabels.forEach(m => r7ColTot[m] = 0); let r7Grand = 0;
+        const r7ColTot = {}; wmChrono.forEach(m => r7ColTot[m] = 0); let r7Grand = 0;
         r7Codes.forEach((code, ri) => {
           const mm = r7Map[code] || {}, at = r7Attr[code] || ['(blank)', '(blank)', '(blank)', '(blank)'];
-          const vals = [code, at[0], at[1], at[2], at[3], ...wmLabels.map(m => (mm[m] === undefined ? null : mm[m]))];
-          const gt = wmLabels.reduce((s, m) => s + (mm[m] || 0), 0);
+          const vals = [code, at[0], at[1], at[2], at[3], ...wmChrono.map(m => (mm[m] === undefined ? null : mm[m]))];
+          const gt = wmChrono.reduce((s, m) => s + (mm[m] || 0), 0);
           vals.push(gt); r7Grand += gt;
-          wmLabels.forEach(m => r7ColTot[m] += (mm[m] || 0));
+          wmChrono.forEach(m => r7ColTot[m] += (mm[m] || 0));
           const dr = wsR7.addRow(vals);
           dr.eachCell({ includeEmpty: false }, (cell, cn) => {
             cell.border = box(thin); cell.font = { name: 'Calibri', size: 10 };
@@ -6885,7 +6912,7 @@
             if (ri % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GREY } };
           });
         });
-        const r7GT = wsR7.addRow(['Grand Total', '', '', '', '', ...wmLabels.map(m => r7ColTot[m] || null), r7Grand]);
+        const r7GT = wsR7.addRow(['Grand Total', '', '', '', '', ...wmChrono.map(m => r7ColTot[m] || null), r7Grand]);
         r7GT.eachCell({ includeEmpty: false }, (cell, cn) => {
           cell.font = { bold: true, name: 'Calibri', size: 10.5, color: { argb: 'FFFFFFFF' } };
           cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: TITLEBG } };
