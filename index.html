@@ -6483,7 +6483,7 @@
         const my = multiYear.size > 1;
         rows.forEach(r => r.monthLbl = (r.month === '(blank)') ? '(blank)' : (my ? r.month + '-' + r.year : r.month));
         const tot = rows.reduce((s, r) => s + r.assetIncome, 0);
-        return { rows, note: `${fmtN(rows.length)} line items \u00b7 ${fmtN(new Set(rows.map(r => r.invoice)).size)} invoices \u00b7 total sales ${crore(tot)} \u00b7 filter, search & export the <b>Master Data + Dashboard + R1 + R2</b> workbook.` };
+        return { rows, note: `${fmtN(rows.length)} line items \u00b7 ${fmtN(new Set(rows.map(r => r.invoice)).size)} invoices \u00b7 total sales ${crore(tot)} \u00b7 filter, search & export the <b>Master Data + Dashboard + R1 + R2 + EQP WISE + Client Wise + R6 + R7</b> workbook.` };
       }
 
       const sum = (v, k) => v.reduce((s, r) => s + (+r[k] || 0), 0);
@@ -6607,7 +6607,7 @@
         { key: 'invDate', label: 'Document Date range', type: 'daterange' }
       ];
 
-      /* ---------- Excel export: Master Data + Dashboard + R1 + R2 ---------- */
+      /* ---------- Excel export: Master Data + Dashboard + R1 + R2 + EQP WISE + Client Wise + R6 + R7 ---------- */
       async function exportExcel(fileName) {
         const data = (typeof VIEW !== 'undefined' && Array.isArray(VIEW)) ? VIEW : RAW;
         const wb = new ExcelJS.Workbook(); wb.creator = 'Vision Infra Report Analyzer';
@@ -6798,6 +6798,101 @@
           if (cn > 1) { cell.numFmt = NUM; cell.alignment = { horizontal: 'right' }; }
         });
 
+        /* ---- Sheet 7: R6 (WORKING_MONTH x Document month, ASSETWISE_INCOME) ----
+           Both R6 and R7 are Excel PivotTables over the master sheet, so they follow
+           pivot conventions rather than chronological ones:
+             - WORKING_MONTH is a TEXT field, so its members sort ALPHABETICALLY
+               (Apr-2025, Apr-2026, Aug-2025, ... Sep-2026) and "(blank)" comes last.
+             - Document Date is grouped by month, so those columns run in calendar
+               order (Apr, May, Jun ...).
+             - A combination with no rows stays empty; one that nets to zero prints 0.
+           Measure is ASSETWISE_INCOME, per the Sales rule used everywhere but R1. */
+        const wmLabels = (() => {
+          const set = new Set(); let hasBlank = false;
+          allData.forEach(r => { const v = r.wmLabel || '(blank)'; if (v === '(blank)') hasBlank = true; else set.add(v); });
+          const out = [...set].sort((a, b) => a.localeCompare(b));
+          if (hasBlank) out.push('(blank)');
+          return out;
+        })();
+        const docMonths = (() => {
+          const m = new Map();
+          allData.forEach(r => { if (r.invDate) m.set(r.invDate.getMonth(), MONF[r.invDate.getMonth()]); });
+          return [...m.entries()].sort((a, b) => a[0] - b[0]).map(x => x[1]);
+        })();
+        const wsR6 = wb.addWorksheet('R6', { views: [{ state: 'frozen', ySplit: 1 }] });
+        [22].concat(docMonths.map(() => 18)).concat([18]).forEach((w, i) => wsR6.getColumn(i + 1).width = w);
+        const r6Map = {};
+        allData.forEach(r => {
+          const rk = r.wmLabel || '(blank)', ck = r.invDate ? MONF[r.invDate.getMonth()] : null;
+          if (!ck) return;
+          (r6Map[rk] = r6Map[rk] || {})[ck] = (r6Map[rk][ck] || 0) + (+r.assetIncome || 0);
+        });
+        const r6Hdr = ['Working Month', ...docMonths, 'Grand Total'];
+        wsR6.addRow(r6Hdr); styleHeadRow(wsR6, 1, r6Hdr.length);
+        wsR6.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: r6Hdr.length } };
+        const r6ColTot = {}; docMonths.forEach(m => r6ColTot[m] = 0); let r6Grand = 0;
+        wmLabels.forEach((wl, ri) => {
+          const mm = r6Map[wl] || {};
+          const vals = [wl, ...docMonths.map(m => (mm[m] === undefined ? null : mm[m]))];
+          const gt = docMonths.reduce((s, m) => s + (mm[m] || 0), 0);
+          vals.push(gt); r6Grand += gt;
+          docMonths.forEach(m => r6ColTot[m] += (mm[m] || 0));
+          const dr = wsR6.addRow(vals);
+          dr.eachCell({ includeEmpty: false }, (cell, cn) => {
+            cell.border = box(thin); cell.font = { name: 'Calibri', size: 10 };
+            if (cn > 1) { cell.numFmt = NUM; cell.alignment = { horizontal: 'right' }; }
+            if (ri % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GREY } };
+          });
+        });
+        const r6GT = wsR6.addRow(['Grand Total', ...docMonths.map(m => r6ColTot[m] || null), r6Grand]);
+        r6GT.eachCell({ includeEmpty: false }, (cell, cn) => {
+          cell.font = { bold: true, name: 'Calibri', size: 10.5, color: { argb: 'FFFFFFFF' } };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: TITLEBG } };
+          cell.border = box(thin);
+          if (cn > 1) { cell.numFmt = NUM; cell.alignment = { horizontal: 'right' }; }
+        });
+
+        /* ---- Sheet 8: R7 (equipment x WORKING_MONTH, ASSETWISE_INCOME) ----
+           Same pivot conventions; the five equipment attributes are taken from the
+           first row seen for that code, as an Excel pivot's row labels do. */
+        const wsR7 = wb.addWorksheet('R7', { views: [{ state: 'frozen', xSplit: 5, ySplit: 1 }] });
+        [18, 34, 22, 18, 10].concat(wmLabels.map(() => 16)).concat([18]).forEach((w, i) => wsR7.getColumn(i + 1).width = w);
+        const r7Map = {}, r7Attr = {};
+        allData.forEach(r => {
+          const code = r.assetCode || '(blank)', wl = r.wmLabel || '(blank)';
+          if (!r7Attr[code]) r7Attr[code] = [r.assetDesc || '(blank)', r.equipType || '(blank)', r.make || '(blank)', r.yom || '(blank)'];
+          (r7Map[code] = r7Map[code] || {})[wl] = (r7Map[code][wl] || 0) + (+r.assetIncome || 0);
+        });
+        const r7Codes = (() => {
+          const keys = Object.keys(r7Map).filter(k => k !== '(blank)').sort((a, b) => a.localeCompare(b));
+          if (r7Map['(blank)']) keys.push('(blank)');
+          return keys;
+        })();
+        const r7Hdr = ['EQUIP_CODE', 'EQUIP_DESCR', 'EQUIPMENTTYPE', 'MAKE', 'YOM', ...wmLabels, 'Grand Total'];
+        wsR7.addRow(r7Hdr); styleHeadRow(wsR7, 1, r7Hdr.length);
+        wsR7.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: r7Hdr.length } };
+        const r7ColTot = {}; wmLabels.forEach(m => r7ColTot[m] = 0); let r7Grand = 0;
+        r7Codes.forEach((code, ri) => {
+          const mm = r7Map[code] || {}, at = r7Attr[code] || ['(blank)', '(blank)', '(blank)', '(blank)'];
+          const vals = [code, at[0], at[1], at[2], at[3], ...wmLabels.map(m => (mm[m] === undefined ? null : mm[m]))];
+          const gt = wmLabels.reduce((s, m) => s + (mm[m] || 0), 0);
+          vals.push(gt); r7Grand += gt;
+          wmLabels.forEach(m => r7ColTot[m] += (mm[m] || 0));
+          const dr = wsR7.addRow(vals);
+          dr.eachCell({ includeEmpty: false }, (cell, cn) => {
+            cell.border = box(thin); cell.font = { name: 'Calibri', size: 10 };
+            if (cn > 5) { cell.numFmt = NUM; cell.alignment = { horizontal: 'right' }; }
+            if (ri % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GREY } };
+          });
+        });
+        const r7GT = wsR7.addRow(['Grand Total', '', '', '', '', ...wmLabels.map(m => r7ColTot[m] || null), r7Grand]);
+        r7GT.eachCell({ includeEmpty: false }, (cell, cn) => {
+          cell.font = { bold: true, name: 'Calibri', size: 10.5, color: { argb: 'FFFFFFFF' } };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: TITLEBG } };
+          cell.border = box(thin);
+          if (cn > 5) { cell.numFmt = NUM; cell.alignment = { horizontal: 'right' }; }
+        });
+
         const buf = await wb.xlsx.writeBuffer();
         const a = document.createElement('a');
         a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
@@ -6809,7 +6904,7 @@
           name: 'Sales Dashboard', tagline: 'Sales analytics \u2014 value by customer, item, region & month',
           icon: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg>'
         },
-        hint: 'Upload the ERP <b>sales dump</b> (workbook with a <b>Master</b> sheet: Document No, Party Name, Item Code, GST_TXABL, TOTAL_AMOUNT, LOB_DESC, SITE_NAME, EQUIPMENTTYPE\u2026). Filter by customer / site / region / month and search by invoice or item \u2014 KPIs &amp; charts update live in <b>\u20b9 Cr</b>. The Excel export gives <b>Master Data + Dashboard + R1 + R2</b>.',
+        hint: 'Upload the ERP <b>sales dump</b> (workbook with a <b>Master</b> sheet: Document No, Party Name, Item Code, GST_TXABL, TOTAL_AMOUNT, LOB_DESC, SITE_NAME, EQUIPMENTTYPE\u2026). Filter by customer / site / region / month and search by invoice or item \u2014 KPIs &amp; charts update live in <b>\u20b9 Cr</b>. The Excel export gives all eight sheets: <b>Master Data + Dashboard + R1 + R2 + EQP WISE + Client Wise + R6 + R7</b>.',
         sheetName: 'Sales', exportName: 'VisionInfra-Sales-Dashboard',
         process, kpis, charts, columns, tableColumns, filters, searchKeys: ['invoice', 'customer', 'itemCode', 'itemDesc', 'site', 'assetCode'], exportExcel
       };
