@@ -186,7 +186,12 @@ function buildHtml({ recipientName, title, description, reports, portalUrl, shar
     const name = esc(REPORT_NAMES[r.report_type] || r.report_type);
     const kpis = kpiGrid(r.kpis || [], F);
     const charts = (r.charts || []).map((c, i) => chartBlock(c, i, F)).join('');
+    // Two different situations, and they need different wording: the report was
+    // never opened, or a newer file was uploaded after the last dashboard capture
+    // (email_payload_svc withholds the figures in that case rather than pairing
+    // them with the wrong file).
     const stale = (!r.kpis || !r.kpis.length) && (!r.charts || !r.charts.length);
+    const outdated = !!r.snapshot_stale;
     return `
     <tr><td style="padding:0 28px 22px;">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
@@ -210,8 +215,16 @@ function buildHtml({ recipientName, title, description, reports, portalUrl, shar
         </td></tr>
         <tr><td style="padding:14px 16px 16px;">
           ${stale
-            ? `<div style="font:400 12px/1.6 ${F};color:#8496a9;text-align:center;padding:10px;">
-                 Open this report in the portal once to include its dashboard figures here.</div>`
+            ? (outdated
+              ? `<div style="background:#fff8e6;border:1px solid #f0dca8;border-radius:8px;padding:11px 13px;">
+                   <div style="font:700 12px/1.5 ${F};color:#8a6d1f;">Figures not yet refreshed for this file</div>
+                   <div style="font:400 11.5px/1.6 ${F};color:#8a6d1f;padding-top:3px;">
+                     A newer file was uploaded after the dashboard was last opened. Open this report in the
+                     portal to refresh the summary \u2014 the earlier figures have been withheld so they are
+                     not read as belonging to this upload.</div>
+                 </div>`
+              : `<div style="font:400 12px/1.6 ${F};color:#8496a9;text-align:center;padding:10px;">
+                   Open this report in the portal once to include its dashboard figures here.</div>`)
             : kpis + charts}
         </td></tr>
       </table>

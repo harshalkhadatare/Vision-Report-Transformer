@@ -1692,3 +1692,72 @@ end; $$;
 
 grant execute on function public.touch_session(uuid) to anon, authenticated;
 notify pgrst, 'reload schema';
+
+-- ============================================================================
+-- EMAIL PAYLOAD  —  never pair a stale snapshot with a newer upload
+--
+--   The dashboard figures shown in a scheduled email come from report_snapshots,
+--   captured in the browser when someone opens a report. The file card beside
+--   them comes from the newest row in uploads. Those were joined independently,
+--   so if a NEWER file was uploaded after the last snapshot, the mail showed the
+--   new file's name and record count next to the OLD file's figures — e.g. "364
+--   ledger accounts" printed against a 319-record file.
+--
+--   The snapshot is now only attached when it actually belongs to that upload:
+--   the captured file name matches, or (when no name was recorded) the capture
+--   happened at or after the upload. Otherwise kpis/charts come back empty and
+--   the mailer prints its "open the report to refresh" notice instead of numbers
+--   that are quietly wrong.
+-- ============================================================================
+create or replace function public.email_payload_svc(p_secret text, p_schedule_id uuid)
+returns json language plpgsql security definer set search_path = public as $$
+declare v_secret text; s record; r json; rep json;
+begin
+  select value into v_secret from public.app_config where key='mail_secret';
+  if v_secret is null or v_secret = '' or p_secret is distinct from v_secret then
+    return json_build_object('ok',false,'error','Not authorised.');
+  end if;
+
+  select * into s from public.email_schedules where id = p_schedule_id;
+  if s.id is null then return json_build_object('ok',false,'error','Schedule not found.'); end if;
+
+  select coalesce(json_agg(json_build_object('name',u.name,'user_id',u.user_id,'email',u.email)),'[]') into r
+    from public.app_users u
+   where u.user_id in (select jsonb_array_elements_text(s.recipients))
+     and u.email is not null and u.email <> '' and u.status='approved';
+
+  -- inner query gathers the pieces; the outer one decides whether the snapshot
+  -- may be shown, so the freshness test is written once and read plainly.
+  select coalesce(json_agg(y order by y.ord),'[]') into rep from (
+    select x.ord, x.report_type, x.file_name, x.row_count, x.uploaded_at,
+           x.uploaded_by, x.file_size,
+           case when x.fresh then x.kpis   else '[]'::jsonb end as kpis,
+           case when x.fresh then x.charts else '[]'::jsonb end as charts,
+           case when x.fresh then x.captured_at else null end    as captured_at,
+           (x.has_snap and not x.fresh)                          as snapshot_stale
+      from (
+        select t.ord,
+               t.rt                                   as report_type,
+               up.file_name, up.row_count, up.uploaded_at, up.uploaded_by, up.file_size,
+               coalesce(sn.kpis,   '[]'::jsonb)       as kpis,
+               coalesce(sn.charts, '[]'::jsonb)       as charts,
+               sn.captured_at,
+               (sn.report_type is not null)           as has_snap,
+               (
+                 up.file_name is null                                        -- nothing to compare against
+                 or (sn.file_name is not null and sn.file_name = up.file_name)
+                 or (sn.file_name is null and sn.captured_at >= up.uploaded_at)
+               )                                      as fresh
+          from jsonb_array_elements_text(s.report_types) with ordinality as t(rt, ord)
+          left join lateral (
+            select file_name,row_count,uploaded_at,uploaded_by,file_size
+              from public.uploads u2 where u2.report_type = t.rt
+             order by uploaded_at desc limit 1) up on true
+          left join public.report_snapshots sn on sn.report_type = t.rt
+      ) x
+  ) y;
+
+  return json_build_object('ok',true,'schedule',row_to_json(s),'recipients',r,'reports',rep);
+end; $$;
+
+notify pgrst, 'reload schema';

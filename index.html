@@ -1617,6 +1617,54 @@
       margin-top: 5px
     }
 
+    /* ---------- live clock in the header ---------- */
+    .topclock {
+      display: flex;
+      align-items: baseline;
+      gap: 9px;
+      margin: 0 auto 0 26px;
+      padding: 6px 14px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, .09);
+      border: 1px solid rgba(255, 255, 255, .16);
+      white-space: nowrap;
+      line-height: 1
+    }
+
+    .topclock .tc-day {
+      font-size: 12px;
+      font-weight: 700;
+      color: #ffd88a;
+      letter-spacing: .3px
+    }
+
+    .topclock .tc-date {
+      font-size: 12.5px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, .92)
+    }
+
+    .topclock .tc-time {
+      font-size: 13px;
+      font-weight: 700;
+      color: #fff;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: .4px
+    }
+
+    /* the header is tight on small screens: drop the clock rather than wrap it */
+    @media (max-width: 1100px) {
+      .topclock .tc-day {
+        display: none
+      }
+    }
+
+    @media (max-width: 900px) {
+      .topclock {
+        display: none
+      }
+    }
+
     .auth-msg {
       font-size: 12.5px;
       border-radius: 10px;
@@ -2283,6 +2331,11 @@
             <b>Vision Infra Equipment Solutions Ltd</b>
             <span id="brandSub">P&M Report Analyzer</span>
           </div>
+        </div>
+        <div class="topclock" id="topClock" aria-live="polite">
+          <span class="tc-day" id="tcDay"></span>
+          <span class="tc-date" id="tcDate"></span>
+          <span class="tc-time" id="tcTime"></span>
         </div>
         <div class="actions">
 
@@ -4189,6 +4242,38 @@
       Chart.defaults.devicePixelRatio = Math.min(window.devicePixelRatio || 1, 2);
       // Deliberately NOT touching normalized / spanGaps / decimation: those change how
       // a line or scatter is drawn, and the goal is speed with no change to output.
+    }
+    /* Live date / time / day in the header. Rendered in IST regardless of where the
+       viewer's machine is set, so everyone in the business sees the same clock as
+       the reports (which are all IST-based). Ticks on the minute boundary rather
+       than every second, so it costs nothing. */
+    function renderTopClock() {
+      const d = document.getElementById('tcDay'), dt = document.getElementById('tcDate'), tm = document.getElementById('tcTime');
+      if (!d || !dt || !tm) return;
+      const opt = { timeZone: 'Asia/Kolkata' };
+      const now = new Date();
+      try {
+        d.textContent = now.toLocaleDateString('en-IN', { ...opt, weekday: 'long' });
+        dt.textContent = now.toLocaleDateString('en-IN', { ...opt, day: '2-digit', month: 'short', year: 'numeric' });
+        tm.textContent = now.toLocaleTimeString('en-IN', { ...opt, hour: '2-digit', minute: '2-digit', hour12: true }).toUpperCase();
+      } catch (e) {
+        d.textContent = now.toLocaleDateString(undefined, { weekday: 'long' });
+        dt.textContent = now.toLocaleDateString();
+        tm.textContent = now.toLocaleTimeString();
+      }
+    }
+    let _clockTimer = null;
+    function startTopClock() {
+      renderTopClock();
+      if (_clockTimer) clearTimeout(_clockTimer);
+      // line up the first tick with the next minute, then run every minute
+      const ms = 60000 - (Date.now() % 60000);
+      _clockTimer = setTimeout(function tick() {
+        renderTopClock();
+        _clockTimer = setTimeout(tick, 60000);
+      }, ms);
+      // coming back to the tab after sleep must not leave a stale time on screen
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) renderTopClock(); });
     }
     function applyTheme(t, persist) {
       if (THEMES.indexOf(t) === -1) t = 'light';
@@ -10369,14 +10454,55 @@
       if (_snapTimer) clearTimeout(_snapTimer);
       _snapTimer = setTimeout(() => { _snapTimer = null; const d = _snapPending; _snapPending = null; _saveSnapshotNow(d); }, 1200);
     }
+    /* Captures the chart data a report WOULD draw for a given set of rows, without
+       building any real Chart objects or touching the page. Used to snapshot the
+       unfiltered figures for email alerts. */
+    function captureChartDataFor(rows) {
+      const out = [];
+      if (!PROC || !PROC.charts) return out;
+      const RealChart = window.Chart;
+      const cap = [];
+      window.Chart = function (cv, cfg) {
+        try {
+          const d = (cfg && cfg.data) || {};
+          cap.push({
+            type: (cfg && cfg.type) || 'bar',
+            labels: (d.labels || []).map(x => String(x)),
+            datasets: (d.datasets || []).map(ds => ({
+              label: ds.label || '',
+              data: (ds.data || []).map(v => (typeof v === 'number' ? v : (v && v.y != null ? v.y : Number(v) || 0)))
+            }))
+          });
+        } catch (e) { cap.push(null); }
+        return { destroy() { }, _stub: true };     // never construct a real chart
+      };
+      if (RealChart) window.Chart.defaults = RealChart.defaults;
+      try {
+        (PROC.charts(rows) || []).forEach(sp => {
+          cap.length = 0;
+          try { sp.render(document.createElement('canvas')); } catch (e) { return; }
+          const c = cap[0];
+          if (c && c.labels.length) out.push({ title: sp.title, sub: sp.sub || '', type: c.type, labels: c.labels, datasets: c.datasets });
+        });
+      } finally { window.Chart = RealChart; }
+      return out;
+    }
     async function _saveSnapshotNow(chartData) {
       try {
         if (!SB || !USER || !USER.token || !CURRENT || !PROC) return;
-        const kpis = (PROC.kpis ? PROC.kpis(VIEW) : []).map(k => ({ label: k[0], value: k[1], sub: k[2] || '' }));
+        /* The snapshot feeds the scheduled email, which must always report the FULL
+           uploaded dataset. Previously it saved whatever the person happened to be
+           looking at, so a filter left on screen (e.g. Debtor Type = Rental) silently
+           became the figures everyone received. Always snapshot RAW, and only pay for
+           the recompute when a filter is actually narrowing the view. */
+        const all = (typeof RAW !== 'undefined' && Array.isArray(RAW)) ? RAW : VIEW;
+        const filtered = !!(all && VIEW && all.length !== VIEW.length);
+        const kpis = (PROC.kpis ? PROC.kpis(all) : []).map(k => ({ label: k[0], value: k[1], sub: k[2] || '' }));
+        const charts = filtered ? captureChartDataFor(all) : (chartData || []);
         await SB.rpc('save_snapshot', {
           p_token: USER.token, p_report_type: CURRENT,
-          p_kpis: kpis, p_charts: chartData || [],
-          p_row_count: VIEW.length, p_file_name: (window.__lastFileName || null)
+          p_kpis: kpis, p_charts: charts,
+          p_row_count: all.length, p_file_name: (window.__lastFileName || null)
         });
       } catch (e) { }
     }
@@ -11196,6 +11322,7 @@
 
     Hary.init();
     initTheme();
+    startTopClock();
     initAuth();
   </script>
   <!-- ============================================================
