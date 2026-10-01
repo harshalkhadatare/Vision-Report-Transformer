@@ -11307,7 +11307,7 @@
           const st = document.getElementById('haryStatus');
           if (aiT.checked) {
             if (st) st.textContent = 'AI mode · live data';
-            row('bot', fmt('🤖 **AI mode on.** I\'ll now answer using the report you have open — e.g. *“which site earned the most?”*, *“summarise this report”*, *“total diesel this month”*. Turn it off to go back to instant built-in answers.'));
+            row('bot', fmt('🤖 AI Mode ON. Ask questions about the open report.'));
             renderSugg(['Summarise this report', 'Top 5 by value', 'Explain the KPIs']);
           } else {
             if (st) st.textContent = 'AI Assistant · Online';
