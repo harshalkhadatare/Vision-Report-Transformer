@@ -11278,7 +11278,7 @@
       function ask(text) { pushUser(text); if (aiOn()) askAI(text); else respond(text); }
       function welcome() {
         body().innerHTML = '';
-        row('bot', fmt(`Hi${userName() ? ' ' + userName() : ''}! 👋 I'm **Hary**, your AI assistant for the **Vision Infra Report Analyzer**. Ask me about reports, uploads, KPIs, charts or troubleshooting — or tap a quick option below.`));
+        row('bot', fmt(`Hi${userName() ? ' ' + userName() : ''}! 👋 I’m Hary, your AI assistant for Vision Infra Report Analyzer. Ask me about reports, KPIs, charts, uploads, or troubleshooting.`));
         renderSugg(['Which report should I use?', 'Upload Excel', 'Dashboard Help', 'Contact Admin']);
         lastIntent = 'greeting';
       }
