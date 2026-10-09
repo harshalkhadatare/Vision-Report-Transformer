@@ -2374,7 +2374,7 @@
       <section id="selectView">
         <div class="ws-head">
           <div class="ws-hi">
-            <h1 id="wsWelcome">Welcome back</h1>
+            <h1 id="wsWelcome">Welcome Back</h1>
             <p>Select a report to upload ERP data, analyse business insights and export results.</p>
             <div class="ws-meta" id="wsMeta"></div>
           </div>
@@ -9946,7 +9946,7 @@
       const w = document.getElementById('wsWelcome'); if (!w || !USER) return;
       const first = String(USER.name || USER.user_id || '').trim().split(/\s+/)[0] || USER.user_id;
       // Management users are greeted with the honorific; everyone else keeps the plain greeting.
-      w.textContent = 'Welcome back, ' + first + (isManagement() ? ' Sir!' : '!');
+      w.textContent = 'Welcome Back, ' + first + (isManagement() ? ' Sir!' : '!');
       const allow = allowedReportIds();
       const meta = [
         ['\uD83D\uDEE1', USER.role === 'admin' ? 'Administrator' : 'User'],
