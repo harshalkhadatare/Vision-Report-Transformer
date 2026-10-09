@@ -27,7 +27,7 @@
       email: "info@visioninfraindia.com",                                                    /* EDIT */
       website: "https://www.visioninfraindia.com/"                                            /* EDIT */
     };
-    const APP_VERSION = "VR 8.0";   /* dashboard build version shown in footer */
+    const APP_VERSION = "VR 8.1";   /* dashboard build version shown in footer */
   </script>
   <style>
     :root {
@@ -2374,7 +2374,7 @@
       <section id="selectView">
         <div class="ws-head">
           <div class="ws-hi">
-            <h1 id="wsWelcome">Welcome Back</h1>
+            <h1 id="wsWelcome">Welcome back</h1>
             <p>Select a report to upload ERP data, analyse business insights and export results.</p>
             <div class="ws-meta" id="wsMeta"></div>
           </div>
@@ -4175,6 +4175,21 @@
     const crore = v => '\u20b9' + fmtN(crN(v), 2) + ' Cr';   // display string ₹X.XX Cr
     const sum = (a, k) => a.reduce((s, x) => s + (+x[k] || 0), 0);
     const uniq = (a, k) => [...new Set(a.map(x => x[k]).filter(v => v !== '' && v != null))].sort();
+    /* SheetJS builds a Date for a date-only cell from the zone's HISTORICAL offset.
+       India's 1900-epoch offset differs from today's +05:30 by ten seconds, so a
+       date-only cell lands at 23:59:50 on the day BEFORE — the date then reads one
+       day early and anything dated the 1st falls into the previous month. A value
+       sitting within two minutes of local midnight is snapped onto it; a genuine
+       time of day (08:00, 14:30) is left untouched.
+       NOTE: applied per report, not inside toDate(), so reports that were already
+       signed off keep their exact existing output. */
+    function snapExcelDay(d) {
+      if (!(d instanceof Date) || isNaN(d)) return d;
+      const s = d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
+      if (s <= 120) return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      if (s >= 86280) { const n = new Date(d.getTime() + 180000); return new Date(n.getFullYear(), n.getMonth(), n.getDate()); }
+      return d;
+    }
     function toDate(v) {
       if (v instanceof Date) return v;
       if (typeof v === 'number') { const o = XLSX.SSF.parse_date_code(v); if (o) return new Date(o.y, o.m - 1, o.d); }
@@ -4184,10 +4199,42 @@
     const ym = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
     const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const monthLabel = d => MON[d.getMonth()] + '-' + d.getFullYear();
+    /* Some ERP exports pad the sheet to a fixed height (the rental logbook ships
+       100,000 rows for ~18,000 of real data) using empty <row/> placeholders.
+       sheet_to_json honours the DECLARED range, so with defval it would build
+       tens of thousands of all-blank rows — slow to produce and heavy to hold.
+       Trailing rows that contain no cell at all cannot carry data, so dropping
+       them is output-neutral for every module. Dense sheets only (all reads here
+       pass dense:true); anything unexpected leaves the range untouched. */
+    function trimSheetRange(ws) {
+      let data = null;
+      try { data = ws['!data'] || (Array.isArray(ws[0]) ? ws : null); } catch (e) { return null; }
+      if (!data || !ws['!ref']) return null;
+      let rng; try { rng = XLSX.utils.decode_range(ws['!ref']); } catch (e) { return null; }
+      let last = rng.s.r;
+      for (let R = rng.e.r; R > rng.s.r; R--) {
+        const row = data[R]; if (!row) continue;
+        let any = false;
+        for (let C = rng.s.c; C <= rng.e.c; C++) { const c = row[C]; if (c && c.t !== undefined) { any = true; break; } }
+        if (any) { last = R; break; }
+      }
+      if (last >= rng.e.r) return null;                       // nothing to trim
+      const saved = ws['!ref'];
+      ws['!ref'] = XLSX.utils.encode_range({ s: rng.s, e: { r: last, c: rng.e.c } });
+      return saved;
+    }
+    /* Single place every module converts a worksheet to rows, so the padding
+       guard above applies everywhere the ERP might start padding exports. */
+    function aoaOf(ws) {
+      if (!ws) return [];
+      const saved = trimSheetRange(ws);
+      try { return XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: true }); }
+      finally { if (saved) ws['!ref'] = saved; }
+    }
     function sheetToAoa(wb, preferred) {
       let name = wb.SheetNames[0];
       if (preferred) { const hit = wb.SheetNames.find(n => norm(n) === norm(preferred)); if (hit) name = hit; }
-      return XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: '', raw: true });
+      return aoaOf(wb.Sheets[name]);
     }
     function findHeader(aoa, tokens) {
       for (let i = 0; i < Math.min(aoa.length, 15); i++) {
@@ -4781,45 +4828,75 @@
     const REPORTS = {};
 
     REPORTS.rental = (function () {
+      /* Column aliases. The 2026 ERP logbook renamed almost every field, so each
+         entry lists the NEW name first and keeps the legacy name after it — that
+         way historical dumps still open. mapCols matches exactly first, then by
+         substring, scanning headers left to right, so the leading alias wins. */
       const DUMP = {
-        asset: ['equipmentnumber', 'equipment', 'assetcode'], date: ['date'], party: ['partyname', 'clientname'],
-        site: ['sitecode'], location: ['sitelocation', 'location'], make: ['make'], model: ['model'],
-        fleet: ['fleettype', 'department'], hrs: ['runninghrs', 'workedhours'], status: ['status'],
-        diesel: ['hdsissueqty', 'hdsissuedqty', 'hdsissue', 'hsdissueqty', 'dieselissueqty', 'dieselissuedqty', 'dieselqty', 'dieselquantity']
+        asset: ['machinecode', 'equipmentnumber', 'equipment', 'assetcode'],
+        date: ['docdate', 'actdate', 'date'],
+        party: ['partyname', 'clientname'],
+        site: ['imloc', 'sitecode'],
+        location: ['loccity', 'sitelocation', 'location'],
+        make: ['make'],
+        model: ['modnum', 'model'],
+        yom: ['yom'],
+        astype: ['astype', 'assettype'],                      // equipment category
+        fleet: ['fleettp', 'fleettype', 'department'],
+        hrs: ['runinghr', 'runninghrs', 'workedhours'],
+        status: ['mcstatus', 'status'],
+        dctype: ['dcdesc'],                                   // RENTAL / CONTRACT / CRUSHER
+        diesel: ['hsdfilqt', 'hdsissueqty', 'hdsissuedqty', 'hdsissue', 'hsdissueqty', 'dieselissueqty', 'dieselissuedqty', 'dieselqty', 'dieselquantity']
       };
       const STATUS = [['working', 'Working', '#1d9e75'], ['idle', 'Idle', '#f59e0b'], ['bdwn', 'Breakdown', '#d8504c'], ['transit', 'In transit', '#2f6db0'], ['free', 'Free', '#8a98a4']];
       const STD = 260 / 30;
+      /* MC_STATUS arrives with varying case/spacing between ERP versions, so the
+         raw text is folded to one canonical bucket instead of matched literally. */
+      const ST_KEYS = { working: 'Working', idle: 'Idle', breakdown: 'Breakdown', bdwn: 'Breakdown', breakdwn: 'Breakdown', transit: 'Transit', intransit: 'Transit', freeasset: 'Free Asset', free: 'Free Asset', maintenance: 'Maintenance', maint: 'Maintenance', undermaintenance: 'Maintenance' };
+      const canonStatus = v => ST_KEYS[norm(v)] || '';
+      /* FLEETTP is '-' / '--' / blank throughout the new dump, which would collapse
+         every department chart into one bucket, so ASTYPE (the equipment category)
+         is used whenever the fleet-type cell carries no real value. */
+      const isBlankish = v => !v || /^[-–—\s.]*$/.test(v);
       function process(wb) {
         const aoa = sheetToAoa(wb, 'Master'); if (!aoa.length) throw new Error('The sheet is empty.');
-        const hi = findHeader(aoa, ['equipmentnumber', 'assetcode']); const headers = (aoa[hi] || []).map(String); const m = mapCols(headers, DUMP);
+        const hi = findHeader(aoa, ['machinecode', 'equipmentnumber', 'assetcode']); const headers = (aoa[hi] || []).map(String); const m = mapCols(headers, DUMP);
+        const NEED = { asset: 'MACHINE CODE (or EQUIPMENT_NUMBER)', date: 'DOC_DATE (or DATE)', status: 'MC_STATUS (or STATUS)', hrs: 'RUNINGHR (or RUNNING_HRS)' };
         for (const f of ['asset', 'date', 'status', 'hrs']) if (m[f] === undefined)
-          throw new Error('Missing a needed Rental column (' + f + '). Expected equipmentnumber, date, status, running_hrs.');
+          throw new Error('Missing a needed Rental column (' + f + '). Expected ' + NEED[f] + '. This report reads the ERP rental logbook — MACHINE CODE, DOC_DATE, MC_STATUS, RUNINGHR.');
         const groups = new Map();
         for (let i = hi + 1; i < aoa.length; i++) {
           const r = aoa[i]; if (!r) continue;
-          const asset = String(r[m.asset] || '').trim(); const d = toDate(r[m.date]); if (!asset || !d) continue;
-          const site = m.site != null ? String(r[m.site] || '').trim() : ''; const status = String(r[m.status] || '').trim(); const hrs = numv(r[m.hrs]);
+          const asset = String(r[m.asset] || '').trim(); const d = snapExcelDay(toDate(r[m.date])); if (!asset || !d) continue;
+          const site = m.site != null ? String(r[m.site] || '').trim() : ''; const status = canonStatus(r[m.status]); const hrs = numv(r[m.hrs]);
           const key = asset + '¦' + site + '¦' + ym(d); let g = groups.get(key);
           if (!g) {
             g = {
-              asset, site, minD: d, maxD: d, worked: 0, diesel: 0, make: '', model: '', dept: '', client: '', location: '',
+              asset, site, minD: d, maxD: d, worked: 0, diesel: 0, make: '', model: '', yom: '', dept: '', client: '', location: '', dcType: '',
               allDates: new Set(), st: { Working: new Set(), Idle: new Set(), Breakdown: new Set(), Transit: new Set(), 'Free Asset': new Set(), Maintenance: new Set() }
             }; groups.set(key, g);
           }
           if (d < g.minD) g.minD = d; if (d > g.maxD) g.maxD = d; g.worked += hrs; if (m.diesel != null) g.diesel += numv(r[m.diesel]);
-          const dk = ymd(d); g.allDates.add(dk); if (g.st[status]) g.st[status].add(dk);
+          const dk = ymd(d); g.allDates.add(dk); if (status && g.st[status]) g.st[status].add(dk);
           if (!g.make && m.make != null && r[m.make]) g.make = String(r[m.make]).trim();
           if (!g.model && m.model != null && r[m.model]) g.model = String(r[m.model]).trim();
-          if (!g.dept && m.fleet != null && r[m.fleet]) g.dept = String(r[m.fleet]).trim().toUpperCase();
+          if (!g.yom && m.yom != null && r[m.yom]) g.yom = String(r[m.yom]).trim();
           if (!g.client && m.party != null && r[m.party]) g.client = String(r[m.party]).trim();
           if (!g.location && m.location != null && r[m.location]) g.location = String(r[m.location]).trim();
+          if (!g.dcType && m.dctype != null && r[m.dctype]) g.dcType = String(r[m.dctype]).trim().toUpperCase();
+          if (!g.dept) {                                      // fleet type, else equipment category
+            const ft = m.fleet != null ? String(r[m.fleet] || '').trim() : '';
+            const at = m.astype != null ? String(r[m.astype] || '').trim() : '';
+            const pick = !isBlankish(ft) ? ft : at;
+            if (!isBlankish(pick)) g.dept = pick.toUpperCase();
+          }
         }
         const out = [];
         for (const g of groups.values()) {
           const total = g.allDates.size, free = g.st['Free Asset'].size, transit = g.st.Transit.size, bdwn = g.st.Breakdown.size, idle = g.st.Idle.size, working = g.st.Working.size;
           const deployed = total - free - transit, billing = idle + working, worked = Math.round(g.worked * 100) / 100, woHour = STD * billing;
           out.push({
-            asset: g.asset, make: g.make, model: g.model, yom: '', dept: g.dept || '—', site: g.site, client: g.client, location: g.location,
+            asset: g.asset, make: g.make, model: g.model, yom: g.yom, dept: g.dept || '—', site: g.site, client: g.client, location: g.location, dcType: g.dcType || '—',
             month: monthLabel(g.minD), start: g.minD, close: g.maxD, total, free, transit, deployed, bdwn, idle, working, billing, worked, diesel: Math.round(g.diesel * 100) / 100, woHour, utilHrs: woHour ? worked / woHour : 0
           });
         }
@@ -4830,7 +4907,7 @@
         const assets = new Set(view.map(x => x.asset)).size, wh = sum(view, 'worked'), wo = sum(view, 'woHour'), util = wo ? wh / wo : 0;
         return [['Equipment Count', fmtN(assets), `${fmtN(view.length)} deployments`, '#2f6db0'],
         ['Worked Hours', fmtN(wh, 2), 'total running hours', '#1d9e75'],
-        ['Diesel Qty', fmtN(sum(view, 'diesel'), 2), 'total issued diesel (HDS_ISSUE_QTY)', '#b45309'],
+        ['Diesel Qty', fmtN(sum(view, 'diesel'), 2), 'total issued diesel (HSDFILQT)', '#b45309'],
         ['Avg Utilisation', fmtPct(util), 'worked hrs ÷ available hrs', '#f59e0b'],
         ['Working Days', fmtN(sum(view, 'working')), 'days in working status', '#1d9e75'],
         ['Idle Days', fmtN(sum(view, 'idle')), 'days in idle status', '#f59e0b'],
@@ -4883,15 +4960,15 @@
         key: c.key, label: c.label,
         fmt: c.type === 'sr' ? 'sr' : c.type === 'date' ? 'date' : c.type === 'num2' ? 'num2' : c.type === 'int' ? 'int' : 'text'
       }));
-      const filters = [{ key: 'day', label: 'Day-wise (calendar)', type: 'calendar', from: 'start', to: 'close' }, { key: 'month', label: 'Month / Year', sort: 'month' }, { key: 'site', label: 'Site', multi: true }, { key: 'asset', label: 'Equipment', multi: true }, { key: 'dept', label: 'Department', multi: true }, { key: 'location', label: 'Location', multi: true }, { key: 'client', label: 'Client' }];
+      const filters = [{ key: 'day', label: 'Day-wise (calendar)', type: 'calendar', from: 'start', to: 'close' }, { key: 'month', label: 'Month / Year', sort: 'month' }, { key: 'dcType', label: 'Contract Type', multi: true }, { key: 'site', label: 'Site', multi: true }, { key: 'asset', label: 'Equipment', multi: true }, { key: 'dept', label: 'Department', multi: true }, { key: 'location', label: 'Location', multi: true }, { key: 'client', label: 'Client' }];
       return {
         meta: {
           name: 'P&M Rental Report', tagline: 'Daily equipment logsheet → utilisation & deployment summary → Upload ERP dump as it is.',
           icon: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13l2-5h14l2 5"/><path d="M5 13h14v5H5z"/><circle cx="7.5" cy="18.5" r="1.5"/><circle cx="16.5" cy="18.5" r="1.5"/></svg>'
         },
-        hint: 'Upload the raw daily logsheet (equipmentnumber, date, status, running_hrs) or a workbook with a <b>Master</b> sheet. Large legacy <b>.xls</b> read best if you Save As <b>.xlsx</b> first.',
+        hint: 'Upload the raw ERP rental logbook (<b>MACHINE CODE, DOC_DATE, MC_STATUS, RUNINGHR</b>) — the 2026 column format is read as-is, and older dumps (equipmentnumber, date, status, running_hrs) still open. Large legacy <b>.xls</b> read best if you Save As <b>.xlsx</b> first.',
         sheetName: 'Summery report', exportName: 'VisionInfra-Rental-Report',
-        process, kpis, charts, columns, tableColumns, filters, searchKeys: ['asset', 'site', 'location', 'make', 'model', 'client']
+        process, kpis, charts, columns, tableColumns, filters, searchKeys: ['asset', 'site', 'location', 'make', 'model', 'client', 'dcType']
       };
     })();
 
@@ -6525,7 +6602,7 @@
       function process(wb) {
         // choose the Master sheet (name containing "master"), else first sheet
         let sheet = wb.SheetNames.find(n => norm(n).includes('master')) || wb.SheetNames[0];
-        const aoa = XLSX.utils.sheet_to_json(wb.Sheets[sheet], { header: 1, defval: '', raw: true });
+        const aoa = aoaOf(wb.Sheets[sheet]);
         if (!aoa.length) throw new Error('The sheet is empty.');
         const hr = findHeader(aoa, ['documentno', 'totalamount', 'gsttxabl', 'partyname']);
         const idx = mapCols(aoa[hr] || [], DEF);
@@ -7058,7 +7135,7 @@
         let name = names.find(n => norm(n).includes('master'))
           || names.find(n => ['mainshet', 'mainsheet', 'data', 'binbyvalue'].indexOf(norm(n)) !== -1)
           || names[0];
-        return XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: '', raw: true });
+        return aoaOf(wb.Sheets[name]);
       }
 
       function process(wb) {
@@ -7406,7 +7483,7 @@
           || names.find(n => norm(n).includes('master'))
           || names.find(n => ['mainshet', 'mainsheet', 'data'].indexOf(norm(n)) !== -1)
           || names[0];
-        return XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: '', raw: true });
+        return aoaOf(wb.Sheets[name]);
       }
       // Excel serial / Date -> first day of that month (matches the MONTH column)
       function monthStart(v) { const d = toDate(v); if (!(d instanceof Date) || isNaN(d)) return null; return new Date(d.getFullYear(), d.getMonth(), 1); }
@@ -7797,7 +7874,7 @@
           || names.find(n => norm(n).includes('master'))
           || names.find(n => ['mainshet', 'mainsheet', 'data'].indexOf(norm(n)) !== -1)
           || names[0];
-        return XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: '', raw: true });
+        return aoaOf(wb.Sheets[name]);
       }
 
       function process(wb) {
@@ -8214,7 +8291,7 @@
         for (const t of tokens) { name = names.find(n => norm(n) === t); if (name) break; }
         if (!name) for (const t of tokens) { name = names.find(n => norm(n).includes(t)); if (name) break; }
         if (!name) name = names[fallbackIdx] || names[0];
-        return { name, aoa: XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: '', raw: true }) };
+        return { name, aoa: aoaOf(wb.Sheets[name]) };
       }
 
       function process(wb) {
@@ -8735,7 +8812,7 @@
         const name = names.find(n => norm(n) === 'masterfile')
           || names.find(n => norm(n).includes('master'))
           || names[names.length - 1] || names[0];
-        return XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: '', raw: true });
+        return aoaOf(wb.Sheets[name]);
       }
       const oldestOf = r => {
         for (let i = BUCKETS.length - 1; i >= 0; i--) if (r[BUCKETS[i].k] > 0)
@@ -9253,12 +9330,12 @@
         for (const t of tokens) { name = names.find(n => norm(n) === t); if (name) break; }
         if (!name) for (const t of tokens) { name = names.find(n => norm(n).includes(t)); if (name) break; }
         if (!name) return null;
-        return { name, aoa: XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: '', raw: true }) };
+        return { name, aoa: aoaOf(wb.Sheets[name]) };
       }
 
       function process(wb) {
         const S = sheetAoa(wb, ['sandeepworing', 'sandeepworking', 'sandeep', 'master'])
-          || { name: wb.SheetNames[0], aoa: XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '', raw: true }) };
+          || { name: wb.SheetNames[0], aoa: aoaOf(wb.Sheets[wb.SheetNames[0]]) };
         if (!S.aoa.length) throw new Error('The loan sheet is empty.');
         const hi = findHeader(S.aoa, ['loannumber', 'loanamt', 'emiamount', 'bankname']);
         const headers = (S.aoa[hi] || []).map(String); const m = mapCols(headers, COLS);
@@ -9946,7 +10023,7 @@
       const w = document.getElementById('wsWelcome'); if (!w || !USER) return;
       const first = String(USER.name || USER.user_id || '').trim().split(/\s+/)[0] || USER.user_id;
       // Management users are greeted with the honorific; everyone else keeps the plain greeting.
-      w.textContent = 'Welcome Back, ' + first + (isManagement() ? ' Sir!' : '!');
+      w.textContent = 'Welcome back, ' + first + (isManagement() ? ' Sir!' : '!');
       const allow = allowedReportIds();
       const meta = [
         ['\uD83D\uDEE1', USER.role === 'admin' ? 'Administrator' : 'User'],
