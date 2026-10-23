@@ -1,0 +1,14 @@
+{
+  "name": "viesl-report-analyzer-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Azure Functions host for the VIESL Report Analyzer API (reuses the Vercel handlers via _azure/shim.js).",
+  "main": "_azure/routes.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.5.1",
+    "nodemailer": "^6.9.14"
+  }
+}

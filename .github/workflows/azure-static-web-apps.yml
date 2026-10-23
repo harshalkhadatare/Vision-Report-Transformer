@@ -1,0 +1,48 @@
+name: Azure Static Web Apps CI/CD
+
+# Deploys ONLY from the Azure branch, so pushes to main keep going to Vercel
+# untouched. Rename the branch here if you ever rename the branch itself.
+on:
+  push:
+    branches:
+      - Azure-deploy
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches:
+      - Azure-deploy
+
+jobs:
+  build_and_deploy:
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action != 'closed')
+    runs-on: ubuntu-latest
+    name: Build and Deploy
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+          lfs: false
+
+      - name: Build And Deploy
+        id: builddeploy
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: "upload"
+          # the site is already plain static HTML - nothing to compile
+          app_location: "/"
+          api_location: "api"
+          output_location: ""
+          skip_app_build: true
+          skip_api_build: false
+
+  close_pull_request:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    name: Close Pull Request
+    steps:
+      - name: Close Pull Request
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          action: "close"

@@ -1,0 +1,9 @@
+# Azure-only files. Keeping them out of the Vercel upload means this branch
+# deploys to Vercel exactly as `main` does - Vercel never sees the Functions
+# host config, so it cannot mistake it for its own.
+api/_azure/
+api/package.json
+api/host.json
+api/.funcignore
+staticwebapp.config.json
+.github/
