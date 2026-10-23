@@ -290,7 +290,7 @@ succeeds.
 
 **Harshal Khadatare** — Data Engineer
 
-[LinkedIn](https://linkedin.com/in/harshal-khadatare) &nbsp;·&nbsp;
+[LinkedIn](https://www.linkedin.com/in/harshal-g-khadatare/?isSelfProfile=true) &nbsp;·&nbsp;
 [GitHub](https://github.com/harshalkhadatare) &nbsp;·&nbsp;
 khadtareharshal2002@gmail.com
 
