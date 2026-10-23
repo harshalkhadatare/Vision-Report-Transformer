@@ -1,55 +1,54 @@
 <div align="center">
 
-<img src="images/logo.png" alt="Vision Infra Equipment Solutions Ltd" width="120">
+<img src="images/logo.png" alt="VIESL" width="110">
 
 # VIESL Report Analyzer
 
-### Enterprise ERP reporting platform — upload, analyse, export.
+### Replacing days of manual Excel work with a browser-based reporting platform 
 
-Turn a raw ERP Excel dump into an interactive dashboard and a
-reference-accurate Excel workbook, entirely in the browser.
+A production system at an infrastructure company, built to migrate **12 legacy
+Excel reports** onto an automated platform without changing a single number.
 
 <br>
 
-![Version](https://img.shields.io/badge/version-5.1-2f6db0?style=for-the-badge)
-![Modules](https://img.shields.io/badge/report_modules-6-1d9e75?style=for-the-badge)
-![Backend](https://img.shields.io/badge/backend-zero--server-7c5cbf?style=for-the-badge)
-![License](https://img.shields.io/badge/license-proprietary-8a98a4?style=for-the-badge)
+![Status](https://img.shields.io/badge/status-in_production-1d9e75?style=for-the-badge)
+![Modules](https://img.shields.io/badge/report_modules-12-2f6db0?style=for-the-badge)
+![Validation](https://img.shields.io/badge/validation-zero_mismatches-7c5cbf?style=for-the-badge)
+![Hosting](https://img.shields.io/badge/live_on-Vercel_%2B_Azure-0891b2?style=for-the-badge)
 
+![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?style=flat-square&logo=javascript&logoColor=black)
+![Python](https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white)
 ![Supabase](https://img.shields.io/badge/Supabase-3ECF8E?style=flat-square&logo=supabase&logoColor=white)
 ![Vercel](https://img.shields.io/badge/Vercel-000000?style=flat-square&logo=vercel&logoColor=white)
-![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?style=flat-square&logo=javascript&logoColor=black)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white)
-![Chart.js](https://img.shields.io/badge/Chart.js-FF6384?style=flat-square&logo=chartdotjs&logoColor=white)
+![Azure](https://img.shields.io/badge/Azure-0078D4?style=flat-square&logo=microsoftazure&logoColor=white)
 
 <br>
 
-**[Live portal](https://vision-report-transformer.vercel.app)** &nbsp;·&nbsp;
+[**Live demo**](https://jolly-dune-01ca78a00.3.azurestaticapps.net/) &nbsp;·&nbsp;
+[The hard part](#-the-hard-part-making-the-numbers-match) &nbsp;·&nbsp;
 [Architecture](#-architecture) &nbsp;·&nbsp;
-[Modules](#-report-modules) &nbsp;·&nbsp;
-[Setup](#-setup) &nbsp;·&nbsp;
-[Troubleshooting](#-operations--troubleshooting)
+[Bugs worth reading about](#-four-bugs-worth-reading-about) &nbsp;·&nbsp;
+[Operations docs](OPERATIONS.md)
 
 </div>
 
 ---
 
-## 📊 At a glance
+## The problem
 
-<div align="center">
+An infrastructure company runs heavy equipment across 100+ sites. Every month, finance
+and operations exported raw dumps from the ERP and rebuilt **twelve reports by hand** in
+Excel — nested formulas, manual pivots, copy-paste between sheets.
 
-| | | | |
-|:---:|:---:|:---:|:---:|
-| **6** | **61** | **41** | **61** |
-| report modules | KPI cards | interactive charts | filters |
-| **9** | **50** | **3** | **4** |
-| database tables | secured RPCs | cron jobs | email templates |
+It took days. It was error-prone. And only the person who built each workbook understood
+how it worked.
 
-</div>
+## What I built
 
----
-
-## 🎯 What it does
+A single-page web application where a user uploads the raw ERP export and immediately
+gets KPIs, charts, filterable tables, and a formatted Excel workbook matching the
+original report sheet-for-sheet.
 
 ```
    ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
@@ -57,523 +56,231 @@ reference-accurate Excel workbook, entirely in the browser.
    │  report  │     │ ERP dump │     │ live KPIs│     │  Excel   │
    │  module  │     │  as-is   │     │ & charts │     │ workbook │
    └──────────┘     └──────────┘     └──────────┘     └──────────┘
-        │                │                 │                │
-   folder-based     no manual        parsed in the      matches the
-    workspace       cleaning           browser        reference sheet
-                                                       for sheet
+
+   no manual cleaning · parsed in the browser · matches the reference
 ```
 
-Every calculation was reverse-engineered from a reference workbook and validated
-**to the rupee** against it — for example the Sales grand total of `₹1,81,34,42,536.07`
-reconciles across 520 asset rows and 6 monthly columns.
+**"As-is" is the point.** The file isn't tidied first. The parser handles headers that
+aren't on row one, columns renamed between months, a sheet name that's genuinely
+misspelled in the ERP, and thousands of trailing blank rows.
+
+---
+
+## 📊 Scale
+
+<div align="center">
+
+| | | | |
+|:---:|:---:|:---:|:---:|
+| **12** | **18,000+** | **545** | **0** |
+| report modules | rows per monthly dump | tracked assets | mismatches allowed |
+| **121** | **70** | **63** | **2** |
+| KPI cards | charts | secured DB functions | live deployments |
+
+</div>
+
+Four business areas — Plant & Machinery, Purchase & Store, Sales, Accounts — serving
+finance and operations users daily.
+
+---
+
+## 🎯 The hard part: making the numbers match
+
+Building the dashboard was the easy half. The hard half was **fidelity**: proving the
+new report produces the same numbers as the workbook it replaces.
+
+### The method
+
+I didn't infer what each report *meant*. I opened every reference workbook and read its
+**actual formulas** — `SUMIFS`, `COUNTIFS`, nested `IF` chains — then reimplemented them
+and verified in Python at three levels:
+
+```
+✓  Grand total      to the paisa
+✓  Per row          every row against its reference row
+✓  Per column       each column total independently
+
+Pass criterion:  zero mismatches.  Not "close enough".
+```
+
+Checking all three matters, because **a grand total can be right by accident.** Two
+offsetting errors produce a correct total with wrong rows — the worst outcome, because
+it looks verified.
+
+> Every time I assumed intent instead of reading the formula, I was wrong. That's the
+> single most useful lesson this project taught me.
+
+---
+
+## 🐛 Four bugs worth reading about
+
+Each of these came from the validation catching a mismatch I would never have guessed.
+
+<table>
+<tr><td width="50%" valign="top">
+
+### Excel's `TRIM` isn't `trim()`
+
+My Outstanding report found **331** distinct parties. The reference had **328**.
+
+Excel's `TRIM()` also collapses runs of spaces *inside* a value, not just at the ends.
+So `ABC␣␣PVT LTD` and `ABC␣PVT LTD` are one party in Excel and two in JavaScript.
+
+```js
+const xlTrim = v =>
+  String(v).replace(/\s+/g, ' ').trim();
+```
+
+</td><td width="50%" valign="top">
+
+### A date column that didn't matter
+
+The Fleet Loan report said **392** EMIs due. I got **390**.
+
+I was filtering on the EMI day-of-month — the obvious reading. Reading the actual
+`COUNTIFS` showed it never references that column at all.
+
+The real rule: loan active during the month, **and** a balance outstanding. The EMI date
+is irrelevant.
+
+</td></tr>
+<tr><td width="50%" valign="top">
+
+### Every date was one day early
+
+Reading Excel dates in IST, SheetJS applies India's *1900-epoch* offset, which differs
+from today's +05:30 by ten seconds. Every date landed at **23:59:50 the previous day**.
+
+All 18,205 rows affected. Anything dated the 1st fell into the previous month, inventing
+532 phantom summary rows.
+
+Fixed by snapping values within two minutes of midnight — leaving genuine times of day
+untouched.
+
+</td><td width="50%" valign="top">
+
+### Emails showing filtered figures
+
+A user reported the scheduled email showing roughly half the total the report showed on
+screen — and 364 ledger accounts against a file containing 319 records.
+
+**Two independent root causes.** The snapshot captured the *filtered* view the user
+happened to be looking at. And deeper, the payload query joined "newest upload" and
+"latest snapshot" independently, pairing data from two different files.
+
+</td></tr>
+</table>
+
+> The second bug was really a **data freshness and lineage** problem — I was manually
+> correlating two tables by timestamp and getting it wrong. On a proper data platform,
+> versioning and lineage remove that class of bug entirely. I'd hand-rolled a weak
+> version of something a platform gives you.
 
 ---
 
 ## 🏛 Architecture
 
-The core decision: **report processing never leaves the browser.** Raw ERP files are
-parsed client-side, so sensitive operational data doesn't need to transit a server to be
-analysed. Server-side pieces exist only where a secret must stay hidden.
+The core decision: **ERP data never leaves the user's browser.** Files are parsed
+client-side, so financial data doesn't transit a server to be analysed. Server-side code
+exists only where a secret must stay hidden.
 
 ```mermaid
 flowchart TB
-    subgraph CLIENT["🖥️  BROWSER  ·  index.html"]
-        direction TB
-        UI["Workspace UI<br/>folders · filters · themes"]
-        ENGINE["Report engine<br/>6 pluggable modules"]
+    subgraph CLIENT["🖥️  BROWSER"]
+        UI["Workspace UI"]
+        ENGINE["Report engine<br/>12 pluggable modules"]
         LIBS["SheetJS · Chart.js · ExcelJS"]
         UI --> ENGINE --> LIBS
     end
 
-    subgraph EDGE["⚡  VERCEL  ·  serverless"]
-        MAIL["/api/send-report-email<br/>scheduled + transactional"]
-        HARY["/api/ask-hary<br/>AI assistant"]
-        TPL["_email-templates.js"]
-        MAIL --- TPL
+    subgraph EDGE["⚡  SERVERLESS"]
+        MAIL["scheduled email"]
+        OTP["password reset"]
+        HARY["AI assistant"]
     end
 
-    subgraph DATA["🗄️  SUPABASE  ·  Postgres"]
-        AUTH["Auth · RBAC<br/>app_users"]
-        STORE["Storage<br/>report-files"]
-        SCHED["pg_cron + pg_net"]
-        LOGS["Schedules · logs<br/>snapshots"]
+    subgraph DATA["🗄️  POSTGRES"]
+        AUTH["auth · RBAC"]
+        STORE["file storage"]
+        SCHED["pg_cron scheduler"]
     end
 
-    CLIENT -->|"RPC (session token)"| AUTH
-    CLIENT -->|"upload .xlsx"| STORE
-    CLIENT -->|"KPI snapshot"| LOGS
-    SCHED -->|"HTTP + shared secret"| MAIL
-    MAIL -->|"SMTP / API"| SMTP["📧 Gmail · Resend"]
-    HARY --> GEMINI["🤖 Gemini API"]
+    CLIENT -->|"session token"| AUTH
+    CLIENT -->|"upload"| STORE
+    SCHED -->|"shared secret"| MAIL
+    MAIL --> SMTP["📧 SMTP"]
+    HARY --> GEMINI["🤖 Gemini"]
 
     style CLIENT fill:#eaf1fb,stroke:#2f6db0,stroke-width:2px
     style EDGE fill:#e6f7ef,stroke:#12885a,stroke-width:2px
     style DATA fill:#fff3e0,stroke:#e08a1e,stroke-width:2px
 ```
 
-### Why this shape
-
 | Decision | Reasoning |
 |---|---|
-| **Client-side processing** | ERP dumps stay on the user's machine; no server needs to hold sensitive operational data |
-| **Single `index.html`** | No build step, no bundler, instant static deploy — 8,500 lines but zero toolchain |
-| **Serverless only for secrets** | API keys for mail and AI must never reach the browser |
-| **`pg_cron` as scheduler** | The database is already always-on; no extra service to run or pay for |
-| **Registry-driven modules** | A new report is one registry entry — filters, exports and permissions come free |
+| **Client-side processing** | Financial data stays on the user's machine. Zero compute cost. |
+| **Registry-driven modules** | A new report is one registry entry — menu, filters, permissions and exports come free. |
+| **Serverless only for secrets** | Anything in the browser is readable by the user. |
+| **`pg_cron` as scheduler** | The database is already always-on. No extra service. |
+| **Defensive parsing** | Sheet aliasing, header detection, column alias mapping — source schemas drift monthly. |
 
 ---
 
-## 📈 Report modules
+## ⚡ Performance
 
-```mermaid
-mindmap
-  root((Report<br/>Analyzer))
-    P&M Reports
-      Rental Report
-      Milling Machine
-    Purchase & Store
-      Stock Report
-      PO-GIN-BILL-PAYMENT
-      Ageing Analysis
-    Sales
-      Sales Dashboard
-```
+Profiled rather than guessed. Both wins were algorithmic, not library swaps — and both
+were proven **output-identical** before shipping.
 
-<div align="center">
+| Change | Result | Verification |
+|:---|:---|:---|
+| Cached number formatters instead of constructing one per value | **38× faster** | byte-identical across 300,000 values, including `NaN` and `null` |
+| Rewrote cascading filters to count failures in a single pass | **3.8× faster** | identical available-value sets for every filter combination |
+| Lazy chart construction via `IntersectionObserver` | only visible charts built | rendered data unchanged; only animation removed |
+| Trimmed 100,000 padded rows the ERP exports down to 18,206 real ones | 82% fewer rows parsed | proven to drop only rows containing zero cells |
 
-| Module | Status | KPIs | Charts | Filters | Export sheets |
-|:---|:---:|:---:|:---:|:---:|:---|
-| 🚜 **P&M Rental Report** | `Ready` | 9 | 4 | 7 | styled detail grid |
-| 🏗 **Milling Machine Report** | `Ready` | 12 | 10 | 16 | `Main Shet` `R1` `R2` `R4` `R5` `R6` `R7` `R9` `Fleet` |
-| 📦 **Stock Report** | `Beta` | 11 | 6 | 8 | `Summary01` `Summary02` `Summary03` |
-| 📑 **PO-GIN-BILL-PAYMENT** | `In dev` | 11 | 6 | 8 | `SUMMARY` (8 sections) `Summary02` |
-| ⏳ **Ageing Report Analysis** | `Ready` | 8 | 7 | 9 | `Master` `Summery` |
-| 💰 **Sales Dashboard** | `Ready` | 10 | 8 | 13 | `Master Data` `Dashboard` `R1` `R2` `EQP WISE` `Client Wise` |
-
-</div>
-
-### Business rules encoded
-
-> These are the non-obvious rules that took reverse-engineering to pin down.
-
-```diff
-+ Sales      primary measure is ASSETWISE_INCOME everywhere …
-!            … except R1, which intentionally stays on GST_TXABL
-+ Sales      Client Wise pivots on TAXABLE VALUE, not assetwise income
-+ Sales      customers grouped case-insensitively (SRC Infra ≡ SRC INFRA)
-+ Milling    ONLY fleet types MILLING MACHINE and SOIL STABILIZER are processed —
-!            all others dropped at parse time, so they reach no KPI, chart or export
-+ Milling    "Active" means RUNNING HRS > 0, not merely present in the dump
-+ Rental     diesel is read from HDS_ISSUE_QTY
-+ All        Month/Year filters sort chronologically across years, not alphabetically
-+ Excel      dates are timezone-compensated — ExcelJS writes UTC and would shift
-!            01-Apr back to 31-Mar in IST
-```
+> A speed-up that changes a number isn't an optimisation — it's a bug with a benchmark
+> attached. Every performance change here had to prove it changed nothing else.
 
 ---
 
-## ✨ Features
+## 🧰 Built with
 
-<table>
-<tr>
-<td width="50%" valign="top">
-
-### 🎨 Dashboards
-- Folder workspace with breadcrumb navigation
-- KPI cards + interactive Chart.js visuals
-- Sortable, searchable grid with lazy pagination
-- Multi-select, range, date-range and **calendar** filters
-- Global search across all modules
-- Favourites · recent · last-generated
-- **Light & dark themes** — WCAG AA verified across 21 colour pairs
-
-</td>
-<td width="50%" valign="top">
-
-### 🔐 Access control
-- bcrypt hashes · session tokens · approval workflow
-- 5-attempt lockout · **1-hour sliding session**
-- **Role Rights** — per-user report permissions
-- Restricted reports show a 🔒 rather than vanishing
-- Blocked on *every* entry path, not just the card
-- Admin panel: users · files · activity · rights · alerts
-
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-
-### 📤 Exports
-- ExcelJS styled workbooks
-- Navy headers · frozen panes · auto-filters
-- Borders · number formats · column widths
-- Sheet names and order match the reference
-- CSV and PDF alongside
-
-</td>
-<td width="50%" valign="top">
-
-### 🤖 Hary assistant
-- On-device rule-based NLU (scoring + fuzzy match)
-- 65-employee directory lookup
-- Optional **AI mode** via Gemini
-- Answers questions about the open report
-- Falls back gracefully when offline
-
-</td>
-</tr>
-</table>
-
----
-
-## 📧 Email notification system
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant C as pg_cron<br/>(every 5 min)
-    participant D as email_dispatch_due()
-    participant V as Vercel function
-    participant S as Supabase
-    participant M as Gmail SMTP
-    participant U as Recipient
-
-    C->>D: tick
-    D->>D: any schedule due?<br/>(0–4 min window, day matches,<br/>not confirmed sent today)
-    D->>V: POST + x-mail-secret
-    V->>S: fetch recipients + KPI snapshots
-    S-->>V: payload
-    V->>V: build branded HTML
-    V->>M: send per recipient
-    M-->>U: 📬 inbox
-    V->>S: email_mark_sent(status)
-    Note over D,S: last_sent_at is set ONLY on confirmation —<br/>a failure retries on the next tick
-```
-
-### Two delivery paths
-
-<table>
-<tr><th width="50%">📅 Scheduled report alerts</th><th width="50%">✉️ Transactional mail</th></tr>
-<tr valign="top"><td>
-
-Configured in **Admin → Email Alerts**
-
-- Pick reports, recipients, time, weekdays
-- Subject modes with **live preview**:
-  - `Report Name + Current Date`
-  - `Custom Subject`
-  - `All Reports Summary`
-- KPI cards + chart data as **HTML bars**
-- Retries up to 6× before giving up
-- One dispatch per tick — no SMTP collisions
-
-</td><td>
-
-Queued in `mail_outbox`, dispatched every minute
-
-| Template | Trigger |
-|---|---|
-| `approved` | admin approves an account |
-| `accountCreated` | registration received |
-| `passwordReset` | password changed |
-| `accountLocked` | repeated failed sign-ins |
-
-All share one shell: logo header, contact card, footer.
-
-</td></tr>
-</table>
-
-> **No images in emails.** Charts render as coloured table cells, so they display even
-> when a client blocks remote images. Everything is table-based with inline styles —
-> Outlook strips `<style>` blocks and flex/grid entirely.
-
-### Transport selection
-
-```mermaid
-flowchart LR
-    A{GMAIL_USER +<br/>APP_PASSWORD set?} -->|yes| B["📧 Gmail SMTP<br/><b>sends to anyone</b><br/>no DNS work"]
-    A -->|no| C{RESEND_API_KEY?}
-    C -->|yes| D["📮 Resend<br/>own address only<br/>until domain verified"]
-    C -->|no| E["⚠️ error:<br/>no transport"]
-    style B fill:#e6f7ef,stroke:#12885a,stroke-width:2px
-    style D fill:#fff3e0,stroke:#e08a1e
-    style E fill:#fdeceb,stroke:#b3261e
-```
-
-Every log line is prefixed `[gmail]` or `[resend]`, so the path taken is always visible.
-
----
-
-## 🗂 Project layout
-
-```
-ReportsVisualizer/
-│
-├── 📄 index.html ······················ the entire app  (8,553 lines)
-│      ├── shell        auth · workspace · filters · admin · themes
-│      ├── REPORTS      6 pluggable report modules
-│      └── Hary         in-app assistant
-│
-├── 📦 package.json ···················· declares nodemailer for the functions
-├── ⚙️  vercel.json ····················· serverless function config
-├── 🗄️  supabase_setup.sql ·············· schema · 50 RPCs · RLS · cron  (idempotent)
-│
-├── 📁 api/
-│   ├── send-report-email.js ·········· scheduled + transactional mail
-│   ├── _email-templates.js ··········· shared branded HTML templates
-│   └── ask-hary.js ·················· Gemini-backed assistant endpoint
-│
-├── 📁 images/ ························ logo.png · logo2.png · background.mp4
-└── 🐍 *.py ··························· offline CLI helpers (not used by the app)
-```
-
----
-
-## 🗄 Data model
-
-```mermaid
-erDiagram
-    app_users ||--o{ uploads : "uploads"
-    app_users ||--o{ report_history : "exports"
-    app_users ||--o{ activity_log : "audit"
-    app_users ||--o{ mail_outbox : "receives"
-    email_schedules ||--o{ email_log : "produces"
-    uploads ||--|| report_snapshots : "latest KPIs"
-
-    app_users {
-        uuid id PK
-        text user_id UK
-        text email UK "mandatory"
-        text password_hash "bcrypt"
-        text role "user|admin"
-        text status "pending|approved|…"
-        jsonb report_access "RBAC"
-        uuid session_token
-    }
-    email_schedules {
-        uuid id PK
-        jsonb report_types
-        jsonb recipients
-        text send_time "HH:MM IST"
-        jsonb days "0=Sun … 6=Sat"
-        text subject_mode
-        int attempts "retry budget"
-    }
-    report_snapshots {
-        text report_type PK
-        jsonb kpis
-        jsonb charts
-    }
-    app_config {
-        text key PK
-        text value "endpoint · secret"
-    }
-```
-
-<div align="center">
-
-| Table | Purpose |
+| Layer | Technology |
 |:---|:---|
-| `app_users` | accounts · roles · status · email · report permissions |
-| `uploads` | uploaded file metadata |
-| `report_history` | per-user export log |
-| `activity_log` | full audit trail |
-| `email_schedules` | scheduled report alerts |
-| `email_log` | delivery outcomes |
-| `mail_outbox` | transactional mail queue |
-| `report_snapshots` | KPI / chart figures for emails |
-| `app_config` | mail endpoint + shared secret |
+| **Frontend** | Vanilla JavaScript (ES6), HTML5, CSS3 — single file, no build step |
+| **Data processing** | SheetJS (parsing), ExcelJS (styled exports), Chart.js |
+| **Backend** | PostgreSQL via Supabase — 11 tables, 63 secured functions, RLS |
+| **Serverless** | Node.js functions on Vercel and Azure Functions |
+| **Scheduling** | `pg_cron` + `pg_net` |
+| **Validation** | Python (openpyxl, pandas) for cell-by-cell reconciliation |
+| **Hosting** | Vercel (`main`) and Azure Static Web Apps (`Azure-deploy`) |
+| **Security** | bcrypt, session tokens, row-level security, OTP password reset |
 
-</div>
+### Running on two clouds
 
----
-
-## 🚀 Setup
-
-<details open>
-<summary><b>1 · Supabase</b></summary>
-
-<br>
-
-Create a project → SQL Editor → run **`supabase_setup.sql`**.
-It is **idempotent**, so re-run it after every update.
-
-Then create a Storage bucket named **`report-files`**.
-
-> 💡 The **first account registered becomes an approved admin** automatically.
-
-</details>
-
-<details open>
-<summary><b>2 · Vercel</b></summary>
-
-<br>
-
-Import the repo, add the environment variables below, deploy.
-No build command — `package.json` exists only so `nodemailer` is installed.
-
-</details>
-
-<details open>
-<summary><b>3 · Wire the scheduler</b></summary>
-
-<br>
-
-```sql
-update public.app_config
-   set value = 'https://<your-app>.vercel.app/api/send-report-email'
- where key = 'mail_endpoint';
-
-update public.app_config
-   set value = '<same string as MAIL_SECRET>'
- where key = 'mail_secret';
-```
-
-Verify:
-
-```sql
-select jobname, schedule, active from cron.job;
-```
-
-| Job | Schedule | Purpose |
-|---|---|---|
-| `report-email-dispatch` | `*/5 * * * *` | scheduled report alerts |
-| `report-email-reset` | `5 18 * * *` | clears retry counters nightly |
-| `outbox-dispatch` | `* * * * *` | transactional mail |
-
-</details>
+The same application is deployed to **Vercel and Azure from two branches**, sharing one
+database. The Azure branch is `main` plus nine files — an adapter translates the Vercel
+function signature to the Azure Functions model, so the business logic stays
+byte-identical on both and a bug is never fixed twice.
 
 ---
 
-## 🔑 Environment variables
+## 🔍 What I'd do differently
 
-<div align="center">
+Stated plainly, because knowing the limits of your own design matters more than defending it.
 
-| Variable | Required | Purpose |
-|:---|:---:|:---|
-| `SUPABASE_URL` | ✅ | project URL |
-| `SUPABASE_SERVICE_KEY` | ✅ | service-role key — **never** expose to the browser |
-| `MAIL_SECRET` | ✅ | shared secret; must equal `app_config.mail_secret` |
-| `PORTAL_URL` | ✅ | links and logo inside emails |
-| `GMAIL_USER` | ⭐ | mailbox that sends |
-| `GMAIL_APP_PASSWORD` | ⭐ | 16-character Google App Password |
-| `MAIL_FROM` | ◽ | `VIESL Reports <viesl.report@gmail.com>` |
-| `RESEND_API_KEY` | ◽ | fallback transport |
-| `GEMINI_KEY` | ◽ | enables Hary's AI mode |
-| `APP_VERSION` | ◽ | shown in the email footer |
-
-✅ required &nbsp;·&nbsp; ⭐ strongly recommended &nbsp;·&nbsp; ◽ optional
-
-</div>
-
-> ⚠️ The **service-role key bypasses row-level security.** It belongs in Vercel
-> environment variables only — never in the repo, never in the browser.
-
-The Supabase URL and *anon* key sit at the top of `index.html`. Both are public by
-design; RLS and the RPC layer enforce access.
-
----
-
-## 📦 Deployment
-
-```bash
-git add .
-git commit -m "your change"
-git push origin main          # Vercel deploys automatically
-```
-
-**Post-deploy checklist**
-
-```
-✔  https://<app>.vercel.app/api/send-report-email
-   → {"ok":false,"error":"Method not allowed."}      function is live
-
-✔  re-run supabase_setup.sql                          if the SQL changed
-✔  Admin → Email Alerts → Send test                   before trusting a schedule
-```
-
----
-
-## 🔧 Operations & troubleshooting
-
-<details>
-<summary><b>📡 Email not arriving — diagnostic queries</b></summary>
-
-<br>
-
-```sql
--- 1. did the request reach Vercel?
-select status_code, left(content, 300), created
-  from net._http_response order by created desc limit 5;
-
--- 2. what did the app record?
-select sent_at, title, status, detail
-  from public.email_log order by sent_at desc limit 10;
-
--- 3. is the schedule actually due?
-select title, enabled, send_time, days, last_sent_at, attempts
-  from public.email_schedules;
-
--- 4. is the endpoint configured correctly?
-select key, value from public.app_config;
-```
-
-</details>
-
-<div align="center">
-
-| Symptom | Root cause | Fix |
+| Limitation | Why it exists | The right fix |
 |:---|:---|:---|
-| `404` + HTML body | wrong `mail_endpoint`, or function not deployed | correct `app_config`, verify the URL |
-| `401 Bad or missing secret` | `MAIL_SECRET` ≠ `app_config.mail_secret` | make them byte-identical, redeploy |
-| `403 validation_error` | Resend domain unverified | use Gmail SMTP |
-| `535-5.7.8` | wrong / revoked App Password | regenerate, paste without spaces |
-| stuck on `queued` | no confirmation received | retries automatically next tick |
-| `next: Tue …` unexpectedly | today's send window already passed | schedule window is only 5 minutes |
-| landing in spam | new sender, no domain reputation | whitelist org-wide (below) |
+| **No history** — each upload replaces the last | there's no storage layer between the raw file and the report | land raw files immutably, so you can ask "what changed?" |
+| **Validation is manual** | the checks are Python scripts I run, not tests in CI | convert them into pipeline assertions that gate every load |
+| **Email figures come from a snapshot** | numbers are computed in the browser; the mailer has no browser | compute server-side, read from versioned tables |
+| **Bounded by one machine's memory** | all processing is client-side | distributed compute once data outgrows a laptop |
 
-</div>
-
-<details>
-<summary><b>📬 Fixing spam placement</b></summary>
-
-<br>
-
-**admin.google.com → Apps → Google Workspace → Gmail → Spam, Phishing and Malware →
-Email allowlist** → add the sender address.
-
-One action covers every `@visioninfraindia.com` recipient. A generic Gmail sender has no
-domain reputation — verifying the company domain in Resend is the durable fix.
-
-</details>
-
-<details>
-<summary><b>⏰ Schedule timing rules</b></summary>
-
-<br>
-
-- Times are **IST**, 24-hour — `00:00` is midnight, `12:00` is midday
-- Prefer **5-minute boundaries** (`09:00`, `09:30`) so the tick lands at the window start
-- **Stagger** schedules; two in the same tick can collide over one SMTP connection
-- The send window is **0–4 minutes** — a time already past today waits for the next
-  selected weekday
-
-</details>
-
----
-
-## ⚠️ Known limitations
-
-> Stated plainly rather than buried — these are real constraints, not oversights.
-
-| Limitation | Why | Path forward |
-|:---|:---|:---|
-| **Email KPIs come from a snapshot** | figures are computed in the browser; the mail function has no browser | extract modules into a shared engine both browser and Node can load |
-| **No email attachments** | export files are built by browser JavaScript | emails link to the portal instead — also avoids the ~25 MB mail cap |
-| **RBAC enforced client-side** | reports process in-browser; there is no per-report API to guard | DB remains the authoritative permission store |
-| **PO-GIN-BILL-PAYMENT incomplete** | pivot rules not yet confirmed | marked `Under Development` in the UI |
-| **Large `.xls` files** | legacy format parses slowly | re-save as `.xlsx` before upload |
-| **~500 recipients/day** | Gmail sending cap | ample at current volume |
+The honest summary: this is a **correctness and migration-fidelity** project, not a
+big-data one. The volumes are thousands of rows, not millions. What it demonstrates is
+reverse-engineering legacy logic, validating to a zero-mismatch bar, and debugging
+production data defects — the unglamorous parts that decide whether a migration
+succeeds.
 
 ---
 
@@ -581,14 +288,17 @@ domain reputation — verifying the company domain in Resend is the durable fix.
 
 ### Built by
 
-**Harshal Khadatare** — Data Engineer, IT
-Report requirements by **Sandeep Patil** — Manager, P&M / Audit
+**Harshal Khadatare** — Data Engineer
+
+[LinkedIn](https://linkedin.com/in/harshal-khadatare) &nbsp;·&nbsp;
+[GitHub](https://github.com/harshalkhadatare) &nbsp;·&nbsp;
+khadtareharshal2002@gmail.com
+
+<sub>Report requirements by <b>Sandeep Patil</b> — Manager, P&M / Audit<br>
+Built at <b>Vision Infra Equipment Solutions Ltd</b>, Pune · © 2026 · All rights reserved</sub>
 
 <br>
 
-**Vision Infra Equipment Solutions Ltd**
-4th floor, International Business Bay, Gurunanak Nagar, Pune 411042, Maharashtra, India
-
-<sub>© 2026 Vision Infra Equipment Solutions Ltd · All rights reserved</sub>
+<sub>Looking for setup, deployment or troubleshooting docs? → <a href="OPERATIONS.md">OPERATIONS.md</a></sub>
 
 </div>
